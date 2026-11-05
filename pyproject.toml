@@ -1,0 +1,31 @@
+[project]
+name = "tcg-scanner"
+version = "0.1.0"
+description = "Identify One Piece TCG cards from photos and track owned cards with prices"
+readme = "README.md"
+authors = [
+    { name = "Alvaro MR", email = "btc@hotmail.es" }
+]
+requires-python = ">=3.14"
+dependencies = []
+
+[project.scripts]
+tcg-scanner = "tcg_scanner:main"
+
+[dependency-groups]
+dev = [
+    "pre-commit",
+    "pytest",
+    "ruff",
+]
+
+[build-system]
+requires = ["uv_build>=0.13.7,<0.14.0"]
+build-backend = "uv_build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
