@@ -57,11 +57,15 @@ they have different lifetimes:
 uv run tcg-scanner db init
 uv run tcg-scanner catalog sync --set OP08
 uv run tcg-scanner catalog sync --set OP08 --no-images
+uv run tcg-scanner index build
 ```
 
 `catalog sync` needs network access. It stores the set's cards, printings, prices and
 reference images under `data/`, and is incremental: re-running adds only new price
 points and missing images.
+
+`index build` embeds every reference image that has no vector yet. The first run
+downloads the DINOv2 weights (~85 MB); it uses CUDA when available.
 
 ## Development
 
@@ -93,5 +97,5 @@ data/              local only, git-ignored
 
 ## Status
 
-Catalog storage and sync are in place for a single set (`OP08`). Recognition is next.
-Python 3.14.
+Catalog storage, sync (single set, `OP08`) and the DINOv2 reference index are in place.
+Rectification, OCR and matching are next. Python 3.14.

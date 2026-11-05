@@ -26,6 +26,12 @@ def build_parser() -> argparse.ArgumentParser:
     sync.add_argument("--set", required=True, metavar="CODE", help="set code, e.g. OP08")
     sync.add_argument("--no-images", action="store_true", help="skip downloading card images")
 
+    index = commands.add_parser("index", help="build the recognition index")
+    index_commands = index.add_subparsers(dest="index_command", required=True)
+    build = index_commands.add_parser("build", help="embed reference images with DINOv2")
+    build.add_argument("--batch-size", type=int, default=8, metavar="N")
+    build.add_argument("--limit", type=int, default=None, metavar="N")
+
     return parser
 
 
@@ -63,6 +69,28 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"{result.set_code}: {result.cards} cards, {result.printings} printings, "
             f"{result.prices} price points, {result.images} images"
         )
+        return 0
+
+    if args.command == "index" and args.index_command == "build":
+        from tcg_scanner.recognition.embed import Embedder
+        from tcg_scanner.recognition.index import build_index
+
+        init_catalog(config.catalog_db())
+        conn = open_catalog(config.catalog_db())
+        try:
+            embedder = Embedder()
+            result = build_index(
+                conn,
+                config.data_dir(),
+                embedder,
+                embedder.model_name,
+                batch_size=args.batch_size,
+                limit=args.limit,
+            )
+        finally:
+            conn.close()
+
+        print(f"{result.embedded} images embedded, {result.missing} missing")
         return 0
 
     return 0

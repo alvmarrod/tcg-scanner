@@ -50,8 +50,9 @@ lighting conditions the single product image does not show. Store the model name
 dimension with every vector, so changing models is delete-and-recompute rather than a
 migration.
 
-Patch tokens are stored alongside the global vector; they are only loaded for the
-shortlist, so the extra size costs nothing at query time.
+Only global descriptors are stored so far. Patch tokens are deferred to the matching
+phase: one 37×37 grid is about 1 MB per image as float16, roughly 10 GB over a full
+catalog. They will need pooling or quantization before they are worth keeping.
 
 ## Why DINOv2
 
