@@ -30,12 +30,14 @@ CREATE TABLE IF NOT EXISTS printings (
     card_code     TEXT NOT NULL REFERENCES cards (code),
     set_code      TEXT NOT NULL REFERENCES sets (code),
     rarity        TEXT NOT NULL DEFAULT 'unknown',
+    -- Print ordinal within the card, as assigned by the source (0 = first print).
+    print_index   INTEGER NOT NULL DEFAULT 0,
     -- 'base' unless the source marks an alternate art/rarity.
     variant_label TEXT NOT NULL DEFAULT 'base',
     image_url     TEXT,
     tcgplayer_id  TEXT,
     cardmarket_id TEXT,
-    UNIQUE (card_code, set_code, rarity, variant_label)
+    UNIQUE (card_code, print_index)
 );
 
 CREATE TABLE IF NOT EXISTS card_images (

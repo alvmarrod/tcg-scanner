@@ -37,7 +37,7 @@ def test_foreign_keys_are_enforced(tmp_path):
         conn.close()
 
 
-def test_printing_uniqueness_treats_variant_label_as_part_of_the_key(tmp_path):
+def test_printing_uniqueness_is_per_card_and_print_index(tmp_path):
     catalog = tmp_path / "catalog.db"
     init_catalog(catalog)
     conn = open_catalog(catalog)
@@ -53,8 +53,8 @@ def test_printing_uniqueness_treats_variant_label_as_part_of_the_key(tmp_path):
         with pytest.raises(sqlite3.IntegrityError):
             conn.execute(row)
         conn.execute(
-            "INSERT INTO printings (card_code, set_code, variant_label) "
-            "VALUES ('OP08-001', 'OP08', 'parallel')"
+            "INSERT INTO printings (card_code, set_code, print_index, variant_label) "
+            "VALUES ('OP08-001', 'OP08', 1, 'aa')"
         )
         assert conn.execute("SELECT COUNT(*) FROM printings").fetchone()[0] == 2
     finally:

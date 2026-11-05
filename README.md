@@ -51,6 +51,18 @@ they have different lifetimes:
 - `catalog.db` — reference data scraped from the source. Disposable and rebuildable.
 - `library.db` — user photos, matches and owned cards. Never rebuilt; backed up.
 
+## Usage
+
+```sh
+uv run tcg-scanner db init
+uv run tcg-scanner catalog sync --set OP08
+uv run tcg-scanner catalog sync --set OP08 --no-images
+```
+
+`catalog sync` needs network access. It stores the set's cards, printings, prices and
+reference images under `data/`, and is incremental: re-running adds only new price
+points and missing images.
+
 ## Development
 
 Requires [uv](https://docs.astral.sh/uv/). The virtualenv and Python version are
@@ -81,5 +93,5 @@ data/              local only, git-ignored
 
 ## Status
 
-Greenfield: recognition design, storage layout and project scaffolding agreed;
-implementation not started. Python 3.14.
+Catalog storage and sync are in place for a single set (`OP08`). Recognition is next.
+Python 3.14.
