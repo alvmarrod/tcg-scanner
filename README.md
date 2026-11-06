@@ -58,6 +58,7 @@ uv run tcg-scanner db init
 uv run tcg-scanner catalog sync --set OP08
 uv run tcg-scanner catalog sync --set OP08 --no-images
 uv run tcg-scanner index build
+uv run tcg-scanner inspect path/to/photo.jpg
 ```
 
 `catalog sync` needs network access. It stores the set's cards, printings, prices and
@@ -66,6 +67,9 @@ points and missing images.
 
 `index build` embeds every reference image that has no vector yet. The first run
 downloads the DINOv2 weights (~85 MB); it uses CUDA when available.
+
+`inspect` rectifies a photo to the canonical card size, writes it to `data/output/`
+and reads the card code. The first run downloads the EasyOCR models (~100 MB).
 
 ## Development
 

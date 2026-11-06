@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import sys
 from collections.abc import Sequence
+from pathlib import Path
 
 from tcg_scanner import config
 from tcg_scanner.catalog import Fetcher, sync_set
@@ -31,6 +32,9 @@ def build_parser() -> argparse.ArgumentParser:
     build = index_commands.add_parser("build", help="embed reference images with DINOv2")
     build.add_argument("--batch-size", type=int, default=8, metavar="N")
     build.add_argument("--limit", type=int, default=None, metavar="N")
+
+    inspect = commands.add_parser("inspect", help="rectify an image and read its card code")
+    inspect.add_argument("image", type=Path, metavar="IMAGE")
 
     return parser
 
@@ -91,6 +95,20 @@ def main(argv: Sequence[str] | None = None) -> int:
             conn.close()
 
         print(f"{result.embedded} images embedded, {result.missing} missing")
+        return 0
+
+    if args.command == "inspect":
+        from tcg_scanner.imaging.rectify import rectify_file, write_image
+        from tcg_scanner.recognition.ocr import CodeReader
+
+        rectified = rectify_file(args.image)
+        output = config.output_dir() / f"{args.image.stem}-rectified.jpg"
+        write_image(output, rectified.image)
+        code = CodeReader().read(rectified.image)
+
+        print(f"card edge: {'found' if rectified.found else 'not found'}")
+        print(f"rectified: {output}")
+        print(f"code: {code or 'unreadable'}")
         return 0
 
     return 0

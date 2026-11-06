@@ -27,9 +27,9 @@ hoping the model is invariant.
    and perspective a non-issue; it also fixes the crop for OCR.
 3. **Normalize** — exposure and white balance against the lamp, so two photos of the
    same card under different light produce comparable vectors.
-4. **OCR (soft signal)** — read the card code from the bottom strip (EasyOCR; stylized
-   small text is beyond stock Tesseract, and PaddleOCR has no Python 3.14 wheel).
-   A successful read narrows
+4. **OCR (soft signal)** — read the code from the rectified card with EasyOCR
+   (stylized small text is beyond stock Tesseract, and PaddleOCR has no Python 3.14
+   wheel), then scan the detections for a code. A successful read narrows
    the candidate set to one `card`. An unreadable code must fall back to searching the
    whole catalog, never to a hard failure.
 5. **Embed** — DINOv2 (`ViT-S/14`, 518 px to start) over the rectified card, global
