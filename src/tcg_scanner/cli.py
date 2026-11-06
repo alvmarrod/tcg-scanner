@@ -53,7 +53,8 @@ def build_parser() -> argparse.ArgumentParser:
     owned = commands.add_parser("owned", help="manage the owned collection")
     owned_commands = owned.add_subparsers(dest="owned_command", required=True)
     owned_add = owned_commands.add_parser("add", help="add a printing to the collection")
-    owned_add.add_argument("printing_id", type=int)
+    owned_add.add_argument("card_code", metavar="CARD_CODE")
+    owned_add.add_argument("print_index", type=int, metavar="PRINT_INDEX")
     owned_add.add_argument("--quantity", type=int, default=1)
     owned_add.add_argument("--condition")
     owned_add.add_argument("--language")
@@ -159,6 +160,19 @@ def _inspect(args: argparse.Namespace) -> int:
     return 0
 
 
+def _snapshot(candidate) -> dict[str, object]:
+    if candidate is None:
+        return {}
+    return {
+        "card_code": candidate.card_code,
+        "print_index": candidate.print_index,
+        "card_name": candidate.card_name,
+        "set_code": candidate.set_code,
+        "variant_label": candidate.variant_label,
+        "image_url": candidate.image_url,
+    }
+
+
 def _identify(args: argparse.Namespace) -> int:
     from datetime import UTC, datetime
 
@@ -192,10 +206,10 @@ def _identify(args: argparse.Namespace) -> int:
         match_id = add_match(
             library,
             photo_id=photo_id,
-            printing_id=top.printing_id if top else None,
             confidence=top.score if top else None,
             method="ocr+dinov2" if code else "dinov2",
             created_at=datetime.now(UTC).isoformat(timespec="seconds"),
+            **_snapshot(top),
         )
         library.commit()
     finally:
@@ -239,8 +253,8 @@ def _matches_accept(args: argparse.Namespace) -> int:
 
     conn = _open_library_with_catalog()
     try:
-        printing_id = accept_match(conn, args.match_id, quantity=args.quantity)
-        printing = get_printing(conn, printing_id)
+        key = accept_match(conn, args.match_id, quantity=args.quantity)
+        printing = get_printing(conn, *key)
         conn.commit()
     except ValueError as error:
         print(error, file=sys.stderr)
@@ -277,7 +291,8 @@ def _owned_add(args: argparse.Namespace) -> int:
     try:
         owned_id = add_owned(
             conn,
-            printing_id=args.printing_id,
+            card_code=args.card_code,
+            print_index=args.print_index,
             quantity=args.quantity,
             condition=args.condition,
             language=args.language,
@@ -285,7 +300,7 @@ def _owned_add(args: argparse.Namespace) -> int:
             currency=args.currency,
             note=args.note,
         )
-        printing = get_printing(conn, args.printing_id)
+        printing = get_printing(conn, args.card_code, args.print_index)
         conn.commit()
     except ValueError as error:
         print(error, file=sys.stderr)
@@ -313,7 +328,8 @@ def _owned_list(args: argparse.Namespace) -> int:
     for position, row in enumerate(rows, start=1):
         price = "-" if row["price"] is None else f"{row['price']:.2f} {row['currency']}"
         print(
-            f"{position:>2}. {row['card_code'] or '?'}  {row['card_name'] or '?'}  "
+            f"{position:>2}. {row['card_code']} #{row['print_index']}  "
+            f"{row['card_name'] or '?'}  "
             f"({row['set_code'] or '?'}, {row['variant_label'] or '?'})  "
             f"x{row['quantity']}  {price}"
         )

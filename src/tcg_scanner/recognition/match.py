@@ -7,14 +7,17 @@ import numpy as np
 
 from tcg_scanner.recognition.index import ReferenceIndex
 
+PrintingKey = tuple[str, int]
+
 
 @dataclass(frozen=True)
 class Candidate:
-    printing_id: int
     card_code: str
+    print_index: int
     card_name: str
     set_code: str
     variant_label: str
+    image_url: str | None
     score: float
 
 
@@ -24,7 +27,7 @@ def rank(
     *,
     code: str | None = None,
     top_k: int = 5,
-) -> list[tuple[int, float]]:
+) -> list[tuple[PrintingKey, float]]:
     """Rank printings by their best matching reference vector."""
     if len(index) == 0:
         return []
@@ -37,14 +40,14 @@ def rank(
         scores = np.where(mask, scores, -np.inf)
 
     # A printing can have several reference images; keep its best score.
-    printings, inverse = np.unique(index.printing_ids, return_inverse=True)
-    best = np.full(len(printings), -np.inf, dtype=np.float32)
+    key_ids, inverse = np.unique(index.key_ids, return_inverse=True)
+    best = np.full(len(key_ids), -np.inf, dtype=np.float32)
     np.maximum.at(best, inverse, scores)
 
     keep = np.isfinite(best)
-    printings, best = printings[keep], best[keep]
+    key_ids, best = key_ids[keep], best[keep]
     order = np.argsort(-best)[:top_k]
-    return [(int(printings[i]), float(best[i])) for i in order]
+    return [(index.keys[int(key_ids[i])], float(best[i])) for i in order]
 
 
 def identify(
@@ -59,28 +62,29 @@ def identify(
     if not ranked:
         return []
 
-    ids = [printing_id for printing_id, _ in ranked]
-    placeholders = ",".join("?" for _ in ids)
+    condition = " OR ".join("(printing.card_code = ? AND printing.print_index = ?)" for _ in ranked)
+    params = [value for key, _score in ranked for value in key]
     rows = conn.execute(
         f"""
-        SELECT printing.id, printing.card_code, printing.set_code, printing.variant_label,
-               card.name AS card_name
+        SELECT printing.card_code, printing.print_index, printing.set_code,
+               printing.variant_label, printing.image_url, card.name AS card_name
         FROM printings AS printing
         JOIN cards AS card ON card.code = printing.card_code
-        WHERE printing.id IN ({placeholders})
+        WHERE {condition}
         """,
-        ids,
+        params,
     ).fetchall()
-    details = {row["id"]: row for row in rows}
+    details = {(row["card_code"], row["print_index"]): row for row in rows}
 
     return [
         Candidate(
-            printing_id=printing_id,
-            card_code=details[printing_id]["card_code"],
-            card_name=details[printing_id]["card_name"],
-            set_code=details[printing_id]["set_code"],
-            variant_label=details[printing_id]["variant_label"],
+            card_code=key[0],
+            print_index=key[1],
+            card_name=details[key]["card_name"],
+            set_code=details[key]["set_code"],
+            variant_label=details[key]["variant_label"],
+            image_url=details[key]["image_url"],
             score=score,
         )
-        for printing_id, score in ranked
+        for key, score in ranked
     ]

@@ -10,6 +10,8 @@ from tcg_scanner.db.library import (
     reject_match,
 )
 
+IMAGE_URL = "http://img/OP08-001_EN.webp"
+
 
 def _catalog(tmp_path):
     path = tmp_path / "catalog.db"
@@ -23,12 +25,13 @@ def _catalog(tmp_path):
             "INSERT INTO cards (code, name, set_code) VALUES ('OP08-001', 'Chopper', 'OP08')"
         )
         conn.execute(
-            "INSERT INTO printings (id, card_code, set_code, variant_label) "
-            "VALUES (5, 'OP08-001', 'OP08', 'base')"
+            "INSERT INTO printings (card_code, print_index, set_code, variant_label, image_url) "
+            "VALUES ('OP08-001', 0, 'OP08', 'base', ?)",
+            (IMAGE_URL,),
         )
         conn.execute(
-            "INSERT INTO prices (printing_id, source, currency, amount, fetched_at) "
-            "VALUES (5, 'tcgplayer', 'USD', 1.5, '2026-01-01')"
+            "INSERT INTO prices (card_code, print_index, source, currency, amount, fetched_at) "
+            "VALUES ('OP08-001', 0, 'tcgplayer', 'USD', 1.5, '2026-01-01')"
         )
         conn.commit()
     finally:
@@ -42,6 +45,24 @@ def _library(tmp_path, catalog_path):
     conn = open_library(path)
     attach_catalog(conn, catalog_path)
     return conn
+
+
+def _match(conn, **overrides):
+    photo_id = add_photo(conn, path="a.jpg", sha256=f"sha-{len(overrides)}-{id(overrides)}")
+    values = {
+        "photo_id": photo_id,
+        "card_code": "OP08-001",
+        "print_index": 0,
+        "card_name": "Chopper",
+        "set_code": "OP08",
+        "variant_label": "base",
+        "image_url": IMAGE_URL,
+        "confidence": 0.8,
+        "method": "dinov2",
+        "created_at": "2026-01-01T00:00:00Z",
+    }
+    values.update(overrides)
+    return add_match(conn, **values)
 
 
 def test_add_photo_dedupes_by_sha(tmp_path):
@@ -58,18 +79,19 @@ def test_add_photo_dedupes_by_sha(tmp_path):
 def test_add_match_starts_pending_and_accepts_no_match(tmp_path):
     conn = _library(tmp_path, _catalog(tmp_path))
     try:
-        photo_id = add_photo(conn, path="a.jpg", sha256="abc")
-        match_id = add_match(
+        match_id = _match(
             conn,
-            photo_id=photo_id,
-            printing_id=None,
+            card_code=None,
+            print_index=None,
+            card_name=None,
+            set_code=None,
+            variant_label=None,
+            image_url=None,
             confidence=None,
-            method="dinov2",
-            created_at="2026-01-01T00:00:00Z",
         )
         row = conn.execute("SELECT * FROM matches WHERE id = ?", (match_id,)).fetchone()
         assert row["status"] == "pending"
-        assert row["printing_id"] is None
+        assert row["card_code"] is None
     finally:
         conn.close()
 
@@ -77,24 +99,18 @@ def test_add_match_starts_pending_and_accepts_no_match(tmp_path):
 def test_accept_match_adds_the_printing_to_owned(tmp_path):
     conn = _library(tmp_path, _catalog(tmp_path))
     try:
-        photo_id = add_photo(conn, path="a.jpg", sha256="abc")
-        match_id = add_match(
-            conn,
-            photo_id=photo_id,
-            printing_id=5,
-            confidence=0.8,
-            method="ocr+dinov2",
-            created_at="2026-01-01T00:00:00Z",
-        )
+        match_id = _match(conn)
 
-        printing_id = accept_match(conn, match_id, quantity=2, acquired_at="2026-01-02")
+        key = accept_match(conn, match_id, quantity=2, acquired_at="2026-01-02")
 
-        assert printing_id == 5
+        assert key == ("OP08-001", 0)
         status = conn.execute("SELECT status FROM matches WHERE id = ?", (match_id,)).fetchone()[0]
         assert status == "accepted"
         owned = conn.execute("SELECT * FROM owned").fetchall()
         assert len(owned) == 1
-        assert owned[0]["printing_id"] == 5
+        assert (owned[0]["card_code"], owned[0]["print_index"]) == ("OP08-001", 0)
+        assert owned[0]["card_name"] == "Chopper"
+        assert owned[0]["image_url"] == IMAGE_URL
         assert owned[0]["quantity"] == 2
         assert owned[0]["acquired_at"] == "2026-01-02"
     finally:
@@ -104,15 +120,7 @@ def test_accept_match_adds_the_printing_to_owned(tmp_path):
 def test_accept_match_twice_raises(tmp_path):
     conn = _library(tmp_path, _catalog(tmp_path))
     try:
-        photo_id = add_photo(conn, path="a.jpg", sha256="abc")
-        match_id = add_match(
-            conn,
-            photo_id=photo_id,
-            printing_id=5,
-            confidence=0.8,
-            method="dinov2",
-            created_at="2026-01-01T00:00:00Z",
-        )
+        match_id = _match(conn)
         accept_match(conn, match_id)
         with pytest.raises(ValueError, match="already accepted"):
             accept_match(conn, match_id)
@@ -123,15 +131,7 @@ def test_accept_match_twice_raises(tmp_path):
 def test_accept_match_without_printing_raises(tmp_path):
     conn = _library(tmp_path, _catalog(tmp_path))
     try:
-        photo_id = add_photo(conn, path="a.jpg", sha256="abc")
-        match_id = add_match(
-            conn,
-            photo_id=photo_id,
-            printing_id=None,
-            confidence=None,
-            method="dinov2",
-            created_at="2026-01-01T00:00:00Z",
-        )
+        match_id = _match(conn, card_code=None, print_index=None, image_url=None, confidence=None)
         with pytest.raises(ValueError, match="no printing"):
             accept_match(conn, match_id)
     finally:
@@ -141,15 +141,7 @@ def test_accept_match_without_printing_raises(tmp_path):
 def test_reject_match_blocks_a_later_accept(tmp_path):
     conn = _library(tmp_path, _catalog(tmp_path))
     try:
-        photo_id = add_photo(conn, path="a.jpg", sha256="abc")
-        match_id = add_match(
-            conn,
-            photo_id=photo_id,
-            printing_id=5,
-            confidence=0.8,
-            method="dinov2",
-            created_at="2026-01-01T00:00:00Z",
-        )
+        match_id = _match(conn)
         reject_match(conn, match_id)
         status = conn.execute("SELECT status FROM matches WHERE id = ?", (match_id,)).fetchone()[0]
         assert status == "rejected"
@@ -162,12 +154,11 @@ def test_reject_match_blocks_a_later_accept(tmp_path):
 def test_owned_list_joins_the_latest_price(tmp_path):
     conn = _library(tmp_path, _catalog(tmp_path))
     try:
-        add_owned(conn, printing_id=5, quantity=2, acquired_at="2026-01-02")
+        add_owned(conn, card_code="OP08-001", print_index=0, quantity=2, acquired_at="2026-01-02")
 
         rows = list_owned(conn)
 
         assert len(rows) == 1
-        assert rows[0]["card_code"] == "OP08-001"
         assert rows[0]["card_name"] == "Chopper"
         assert rows[0]["quantity"] == 2
         assert rows[0]["price"] == 1.5
@@ -180,6 +171,33 @@ def test_add_owned_rejects_an_unknown_printing(tmp_path):
     conn = _library(tmp_path, _catalog(tmp_path))
     try:
         with pytest.raises(ValueError, match="unknown printing"):
-            add_owned(conn, printing_id=999)
+            add_owned(conn, card_code="OP08-001", print_index=9)
+    finally:
+        conn.close()
+
+
+def test_accept_match_refuses_a_renumbered_printing(tmp_path):
+    conn = _library(tmp_path, _catalog(tmp_path))
+    try:
+        match_id = _match(conn, image_url="http://img/other-art.webp")
+        with pytest.raises(ValueError, match="changed in the catalog"):
+            accept_match(conn, match_id)
+    finally:
+        conn.close()
+
+
+def test_owned_list_hides_prices_when_the_printing_changed(tmp_path):
+    conn = _library(tmp_path, _catalog(tmp_path))
+    try:
+        add_owned(conn, card_code="OP08-001", print_index=0, quantity=1)
+        conn.execute(
+            "UPDATE catalog.printings SET image_url = 'http://img/renumbered.webp' "
+            "WHERE card_code = 'OP08-001' AND print_index = 0"
+        )
+
+        row = list_owned(conn)[0]
+
+        assert row["card_name"] == "Chopper"
+        assert row["price"] is None
     finally:
         conn.close()

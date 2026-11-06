@@ -27,17 +27,34 @@ def add_match(
     conn: sqlite3.Connection,
     *,
     photo_id: int,
-    printing_id: int | None,
     confidence: float | None,
     method: str,
     created_at: str,
+    card_code: str | None = None,
+    print_index: int | None = None,
+    card_name: str | None = None,
+    set_code: str | None = None,
+    variant_label: str | None = None,
+    image_url: str | None = None,
 ) -> int:
     cursor = conn.execute(
         """
-        INSERT INTO matches (photo_id, printing_id, confidence, method, created_at)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO matches (photo_id, card_code, print_index, card_name, set_code,
+                             variant_label, image_url, confidence, method, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (photo_id, printing_id, confidence, method, created_at),
+        (
+            photo_id,
+            card_code,
+            print_index,
+            card_name,
+            set_code,
+            variant_label,
+            image_url,
+            confidence,
+            method,
+            created_at,
+        ),
     )
     return int(cursor.lastrowid)
 
@@ -48,20 +65,22 @@ def accept_match(
     *,
     quantity: int = 1,
     acquired_at: str | None = None,
-) -> int:
+) -> tuple[str, int]:
     """Mark a pending match accepted and add its printing to the collection."""
     row = _pending_match(conn, match_id)
-    if row["printing_id"] is None:
+    if row["card_code"] is None or row["print_index"] is None:
         raise ValueError(f"match {match_id} has no printing to accept")
 
     conn.execute("UPDATE matches SET status = 'accepted' WHERE id = ?", (match_id,))
     add_owned(
         conn,
-        printing_id=row["printing_id"],
+        card_code=row["card_code"],
+        print_index=row["print_index"],
+        expected_image_url=row["image_url"],
         quantity=quantity,
         acquired_at=acquired_at,
     )
-    return int(row["printing_id"])
+    return row["card_code"], row["print_index"]
 
 
 def reject_match(conn: sqlite3.Connection, match_id: int) -> None:
@@ -72,7 +91,9 @@ def reject_match(conn: sqlite3.Connection, match_id: int) -> None:
 def add_owned(
     conn: sqlite3.Connection,
     *,
-    printing_id: int,
+    card_code: str,
+    print_index: int,
+    expected_image_url: str | None = None,
     quantity: int = 1,
     condition: str | None = None,
     language: str | None = None,
@@ -81,17 +102,28 @@ def add_owned(
     currency: str | None = None,
     note: str | None = None,
 ) -> int:
-    if get_printing(conn, printing_id) is None:
-        raise ValueError(f"unknown printing: {printing_id}")
+    printing = get_printing(conn, card_code, print_index)
+    if printing is None:
+        raise ValueError(f"unknown printing: {card_code} #{print_index}")
+    if expected_image_url is not None and printing["image_url"] != expected_image_url:
+        raise ValueError(
+            f"printing {card_code} #{print_index} changed in the catalog; re-run identify"
+        )
 
     cursor = conn.execute(
         """
-        INSERT INTO owned (printing_id, quantity, condition, language, acquired_at,
+        INSERT INTO owned (card_code, print_index, card_name, set_code, variant_label,
+                           image_url, quantity, condition, language, acquired_at,
                            paid_price, currency, note)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
-            printing_id,
+            card_code,
+            print_index,
+            printing["card_name"],
+            printing["set_code"],
+            printing["variant_label"],
+            printing["image_url"],
             quantity,
             condition,
             language,
@@ -107,32 +139,39 @@ def add_owned(
 def list_owned(conn: sqlite3.Connection, *, source: str = "tcgplayer") -> list[sqlite3.Row]:
     return conn.execute(
         """
-        SELECT owned.id, owned.quantity, owned.condition, owned.language, owned.paid_price,
-               printing.card_code, printing.set_code, printing.variant_label,
-               card.name AS card_name,
-               price.amount AS price, price.currency
+        SELECT owned.id, owned.card_code, owned.print_index, owned.card_name,
+               owned.set_code, owned.variant_label, owned.quantity, owned.condition,
+               owned.language, owned.paid_price,
+               printing.card_code AS resolved,
+               CASE WHEN printing.card_code IS NULL THEN NULL ELSE price.amount END AS price,
+               CASE WHEN printing.card_code IS NULL THEN NULL ELSE price.currency END
+                   AS currency
         FROM owned
-        LEFT JOIN catalog.printings AS printing ON printing.id = owned.printing_id
-        LEFT JOIN catalog.cards AS card ON card.code = printing.card_code
+        LEFT JOIN catalog.printings AS printing
+            ON printing.card_code = owned.card_code
+            AND printing.print_index = owned.print_index
+            AND printing.image_url = owned.image_url
         LEFT JOIN catalog.latest_prices AS price
-            ON price.printing_id = owned.printing_id AND price.source = ?
+            ON price.card_code = owned.card_code
+            AND price.print_index = owned.print_index
+            AND price.source = ?
         ORDER BY owned.id
         """,
         (source,),
     ).fetchall()
 
 
-def get_printing(conn: sqlite3.Connection, printing_id: int) -> sqlite3.Row | None:
+def get_printing(conn: sqlite3.Connection, card_code: str, print_index: int) -> sqlite3.Row | None:
     """Requires catalog.db attached as `catalog`."""
     return conn.execute(
         """
-        SELECT printing.id, printing.card_code, printing.set_code, printing.variant_label,
-               card.name AS card_name
+        SELECT printing.card_code, printing.print_index, printing.set_code,
+               printing.variant_label, printing.image_url, card.name AS card_name
         FROM catalog.printings AS printing
         JOIN catalog.cards AS card ON card.code = printing.card_code
-        WHERE printing.id = ?
+        WHERE printing.card_code = ? AND printing.print_index = ?
         """,
-        (printing_id,),
+        (card_code, print_index),
     ).fetchone()
 
 

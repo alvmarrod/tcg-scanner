@@ -57,8 +57,9 @@ def test_sync_populates_sets_cards_printings_prices_and_images(tmp_path):
         assert base["tcgplayer_id"] == "558021"
 
         latest = conn.execute(
-            "SELECT source, currency, amount FROM latest_prices WHERE printing_id = ?",
-            (base["id"],),
+            "SELECT source, currency, amount FROM latest_prices "
+            "WHERE card_code = ? AND print_index = ?",
+            (base["card_code"], base["print_index"]),
         ).fetchall()
         assert {(row["source"], row["currency"], row["amount"]) for row in latest} == {
             ("tcgplayer", "USD", 0.20),

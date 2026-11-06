@@ -22,21 +22,21 @@ class IndexResult:
 @dataclass(frozen=True)
 class ReferenceIndex:
     vectors: np.ndarray
-    printing_ids: np.ndarray
+    key_ids: np.ndarray
+    keys: list[tuple[str, int]]
     card_codes: list[str]
 
     def __len__(self) -> int:
-        return len(self.printing_ids)
+        return len(self.key_ids)
 
 
 def load_index(conn: sqlite3.Connection, model_name: str) -> ReferenceIndex:
     rows = conn.execute(
         """
-        SELECT embedding.vector, embedding.dim, image.printing_id, card.code AS card_code
+        SELECT embedding.vector, embedding.dim,
+               image.card_code, image.print_index
         FROM embeddings AS embedding
         JOIN card_images AS image ON image.id = embedding.card_image_id
-        JOIN printings AS printing ON printing.id = image.printing_id
-        JOIN cards AS card ON card.code = printing.card_code
         WHERE embedding.model = ? AND embedding.kind = ?
         ORDER BY embedding.card_image_id
         """,
@@ -46,16 +46,29 @@ def load_index(conn: sqlite3.Connection, model_name: str) -> ReferenceIndex:
     if not rows:
         return ReferenceIndex(
             vectors=np.zeros((0, 0), dtype=np.float32),
-            printing_ids=np.zeros(0, dtype=np.int64),
+            key_ids=np.zeros(0, dtype=np.int64),
+            keys=[],
             card_codes=[],
         )
 
     vectors = np.stack([from_blob(row["vector"], row["dim"]).astype(np.float32) for row in rows])
     norms = np.linalg.norm(vectors, axis=1, keepdims=True)
     vectors /= np.maximum(norms, 1e-6)
+
+    key_ids: list[int] = []
+    keys: list[tuple[str, int]] = []
+    assigned: dict[tuple[str, int], int] = {}
+    for row in rows:
+        key = (row["card_code"], row["print_index"])
+        if key not in assigned:
+            assigned[key] = len(keys)
+            keys.append(key)
+        key_ids.append(assigned[key])
+
     return ReferenceIndex(
         vectors=vectors,
-        printing_ids=np.array([row["printing_id"] for row in rows], dtype=np.int64),
+        key_ids=np.array(key_ids, dtype=np.int64),
+        keys=keys,
         card_codes=[row["card_code"] for row in rows],
     )
 

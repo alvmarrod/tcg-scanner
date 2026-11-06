@@ -39,8 +39,8 @@ hoping the model is invariant.
 7. **Verify** — not implemented yet: matching ranks on global descriptors alone.
    Patch-token comparison on a narrow margin and the optional ORB tie-breaker
    arrive once evaluation shows they are needed.
-8. **Report** — `printing_id`, confidence, and method. The match becomes `owned` only
-   after the user confirms it.
+8. **Report** — the printing key `(card_code, print_index)`, confidence, and method.
+   The match becomes `owned` only after the user confirms it.
 
 ## Reference data
 

@@ -73,7 +73,7 @@ def sync_set(
                 if printing.current
                 else variant_image_url(base_image, printing.print_index)
             )
-            printing_id = catalog.upsert_printing(
+            printing_key = catalog.upsert_printing(
                 conn,
                 card_code=card.code,
                 set_code=printing_set,
@@ -91,7 +91,8 @@ def sync_set(
             ):
                 if amount is not None and catalog.add_price(
                     conn,
-                    printing_id=printing_id,
+                    card_code=printing_key[0],
+                    print_index=printing_key[1],
                     source=source,
                     currency=currency,
                     amount=amount,
@@ -99,8 +100,8 @@ def sync_set(
                 ):
                     prices += 1
 
-            if with_images and not catalog.has_reference_image(conn, printing_id):
-                if _download_image(conn, fetcher, data_root, printing_id, image_url):
+            if with_images and not catalog.has_reference_image(conn, *printing_key):
+                if _download_image(conn, fetcher, data_root, printing_key, image_url):
                     images += 1
 
     conn.commit()
@@ -129,7 +130,7 @@ def _download_image(
     conn: sqlite3.Connection,
     fetcher: Fetcher,
     data_root: Path,
-    printing_id: int,
+    printing_key: tuple[str, int],
     url: str,
 ) -> bool:
     try:
@@ -144,7 +145,8 @@ def _download_image(
     path, digest = store_image(data, data_root, Path(urlsplit(url).path).suffix or ".webp")
     catalog.add_card_image(
         conn,
-        printing_id=printing_id,
+        card_code=printing_key[0],
+        print_index=printing_key[1],
         path=path.relative_to(data_root).as_posix(),
         sha256=digest,
     )

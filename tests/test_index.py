@@ -12,15 +12,15 @@ def _seed(tmp_path):
     conn = open_catalog(db_path)
     conn.execute("INSERT INTO sets (code, name, kind) VALUES ('OP08', 'Two Legends', 'booster')")
     conn.execute("INSERT INTO cards (code, name, set_code) VALUES ('OP08-001', 'Chopper', 'OP08')")
-    for index in (1, 2):
+    for index in (0, 1):
         conn.execute(
-            "INSERT INTO printings (card_code, set_code, print_index) "
-            "VALUES ('OP08-001', 'OP08', ?)",
+            "INSERT INTO printings (card_code, print_index, set_code) "
+            "VALUES ('OP08-001', ?, 'OP08')",
             (index,),
         )
         conn.execute(
-            "INSERT INTO card_images (printing_id, path, sha256) VALUES (?, ?, ?)",
-            (index, f"images/{index}.webp", str(index)),
+            "INSERT INTO card_images (card_code, print_index, path, sha256) VALUES (?, ?, ?, ?)",
+            ("OP08-001", index, f"images/{index}.webp", str(index)),
         )
         path = tmp_path / "images" / f"{index}.webp"
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -67,8 +67,12 @@ def test_build_index_skips_missing_files(tmp_path):
     conn = _seed(tmp_path)
     try:
         conn.execute(
-            "INSERT INTO card_images (printing_id, path, sha256) "
-            "VALUES (1, 'images/gone.webp', 'x')"
+            "INSERT INTO printings (card_code, print_index, set_code) "
+            "VALUES ('OP08-001', 2, 'OP08')"
+        )
+        conn.execute(
+            "INSERT INTO card_images (card_code, print_index, path, sha256) "
+            "VALUES ('OP08-001', 2, 'images/gone.webp', 'x')"
         )
         result = build_index(conn, tmp_path, _fake_embed, "fake-model")
         assert result.embedded == 2

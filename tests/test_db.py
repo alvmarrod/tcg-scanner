@@ -48,7 +48,10 @@ def test_printing_uniqueness_is_per_card_and_print_index(tmp_path):
         conn.execute(
             "INSERT INTO cards (code, name, set_code) VALUES ('OP08-001', 'Luffy', 'OP08')"
         )
-        row = "INSERT INTO printings (card_code, set_code) VALUES ('OP08-001', 'OP08')"
+        row = (
+            "INSERT INTO printings (card_code, set_code, print_index) "
+            "VALUES ('OP08-001', 'OP08', 0)"
+        )
         conn.execute(row)
         with pytest.raises(sqlite3.IntegrityError):
             conn.execute(row)

@@ -51,6 +51,11 @@ they have different lifetimes:
 - `catalog.db` — reference data scraped from the source. Disposable and rebuildable.
 - `library.db` — user photos, matches and owned cards. Never rebuilt; backed up.
 
+A printing is identified by `(card_code, print_index)` — alternate arts share a card
+code, so the print ordinal is what tells them apart. User rows also keep a snapshot of
+the printing; catalog data is only trusted while the snapshot still matches, so a
+rebuild that renumbers prints cannot silently repoint a card.
+
 ## Usage
 
 ```sh
@@ -81,7 +86,7 @@ when it can be read.
 `matches accept <id>` marks a pending match accepted and adds its printing to the
 collection; `matches reject <id>` closes it without touching the collection.
 `owned list` shows the collection with the latest catalog prices, and
-`owned add <printing_id>` adds a card by hand.
+`owned add <card_code> <print_index>` adds a card by hand.
 
 ## Development
 
@@ -113,5 +118,6 @@ data/              local only, git-ignored
 
 ## Status
 
-Catalog storage, sync (single set, `OP08`) and the DINOv2 reference index are in place.
-Rectification, OCR and matching are next. Python 3.14.
+Phases 1–6 are in place: storage, catalog sync, the DINOv2 index, rectification, OCR,
+matching, and match confirmation into an owned collection. Evaluation is next.
+Python 3.14.

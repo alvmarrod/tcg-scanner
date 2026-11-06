@@ -75,10 +75,10 @@ def upsert_printing(
     image_url: str,
     tcgplayer_id: str | None,
     cardmarket_id: str | None,
-) -> int:
+) -> tuple[str, int]:
     conn.execute(
         """
-        INSERT INTO printings (card_code, set_code, rarity, print_index, variant_label,
+        INSERT INTO printings (card_code, print_index, set_code, rarity, variant_label,
                                image_url, tcgplayer_id, cardmarket_id)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (card_code, print_index) DO UPDATE SET
@@ -91,26 +91,23 @@ def upsert_printing(
         """,
         (
             card_code,
+            print_index,
             set_code,
             RARITY_UNKNOWN,
-            print_index,
             variant_label,
             image_url,
             tcgplayer_id,
             cardmarket_id,
         ),
     )
-    row = conn.execute(
-        "SELECT id FROM printings WHERE card_code = ? AND print_index = ?",
-        (card_code, print_index),
-    ).fetchone()
-    return row["id"]
+    return card_code, print_index
 
 
 def add_price(
     conn: sqlite3.Connection,
     *,
-    printing_id: int,
+    card_code: str,
+    print_index: int,
     source: str,
     currency: str,
     amount: float,
@@ -119,28 +116,32 @@ def add_price(
     latest = conn.execute(
         """
         SELECT amount, currency FROM prices
-        WHERE printing_id = ? AND source = ?
+        WHERE card_code = ? AND print_index = ? AND source = ?
         ORDER BY fetched_at DESC LIMIT 1
         """,
-        (printing_id, source),
+        (card_code, print_index, source),
     ).fetchone()
     if latest and latest["amount"] == amount and latest["currency"] == currency:
         return False
 
     conn.execute(
         """
-        INSERT INTO prices (printing_id, source, currency, amount, fetched_at)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO prices (card_code, print_index, source, currency, amount, fetched_at)
+        VALUES (?, ?, ?, ?, ?, ?)
         """,
-        (printing_id, source, currency, amount, fetched_at),
+        (card_code, print_index, source, currency, amount, fetched_at),
     )
     return True
 
 
-def has_reference_image(conn: sqlite3.Connection, printing_id: int) -> bool:
+def has_reference_image(conn: sqlite3.Connection, card_code: str, print_index: int) -> bool:
     row = conn.execute(
-        "SELECT 1 FROM card_images WHERE printing_id = ? AND origin = 'reference' LIMIT 1",
-        (printing_id,),
+        """
+        SELECT 1 FROM card_images
+        WHERE card_code = ? AND print_index = ? AND origin = 'reference'
+        LIMIT 1
+        """,
+        (card_code, print_index),
     ).fetchone()
     return row is not None
 
@@ -148,7 +149,8 @@ def has_reference_image(conn: sqlite3.Connection, printing_id: int) -> bool:
 def add_card_image(
     conn: sqlite3.Connection,
     *,
-    printing_id: int,
+    card_code: str,
+    print_index: int,
     path: str,
     sha256: str,
     width: int | None = None,
@@ -156,8 +158,8 @@ def add_card_image(
 ) -> None:
     conn.execute(
         """
-        INSERT INTO card_images (printing_id, path, sha256, width, height, origin)
-        VALUES (?, ?, ?, ?, ?, 'reference')
+        INSERT INTO card_images (card_code, print_index, path, sha256, width, height, origin)
+        VALUES (?, ?, ?, ?, ?, ?, 'reference')
         """,
-        (printing_id, path, sha256, width, height),
+        (card_code, print_index, path, sha256, width, height),
     )
