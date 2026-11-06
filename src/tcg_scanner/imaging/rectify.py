@@ -56,19 +56,41 @@ def _find_card(image: np.ndarray) -> np.ndarray | None:
 
     best: np.ndarray | None = None
     best_area = 0.0
+    fallback: np.ndarray | None = None
+    fallback_area = 0.0
     for contour in contours:
         area = cv2.contourArea(contour)
-        if area < 0.1 * frame_area or area <= best_area:
+        if area < 0.1 * frame_area:
             continue
         perimeter = cv2.arcLength(contour, True)
         approx = cv2.approxPolyDP(contour, 0.02 * perimeter, True)
-        if len(approx) == 4:
+        if len(approx) == 4 and area > best_area:
             best = approx.reshape(4, 2).astype(np.float32)
             best_area = area
+        elif area > fallback_area:
+            # Rounded corners and JPEG blur turn the card into 5+ vertices.
+            fallback = cv2.convexHull(contour).reshape(-1, 2).astype(np.float32)
+            fallback_area = area
 
-    if best is None:
-        return None
-    return _order_corners(best)
+    if best is not None:
+        return _order_corners(best)
+    if fallback is not None:
+        return _order_corners(_quad_from_hull(fallback))
+    return None
+
+
+def _quad_from_hull(hull: np.ndarray) -> np.ndarray:
+    total = hull.sum(axis=1)
+    difference = hull[:, 0] - hull[:, 1]
+    return np.array(
+        [
+            hull[np.argmin(total)],
+            hull[np.argmax(difference)],
+            hull[np.argmax(total)],
+            hull[np.argmin(difference)],
+        ],
+        dtype=np.float32,
+    )
 
 
 def _order_corners(points: np.ndarray) -> np.ndarray:

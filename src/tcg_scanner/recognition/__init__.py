@@ -1,3 +1,3 @@
-from tcg_scanner.recognition.index import IndexResult, build_index
+from tcg_scanner.recognition.match import Candidate, identify, rank
 
-__all__ = ["IndexResult", "build_index"]
+__all__ = ["Candidate", "identify", "rank"]

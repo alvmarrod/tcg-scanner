@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    import numpy as np
+import numpy as np
 
 MODEL_NAME = "vit_small_patch14_dinov2.lvd142m"
 
@@ -30,11 +28,18 @@ class Embedder:
         self.transform = timm.data.create_transform(**config, is_training=False)
 
     def __call__(self, paths: list[Path]) -> np.ndarray:
-        import numpy as np
         from PIL import Image
 
-        images = [self.transform(Image.open(path).convert("RGB")) for path in paths]
-        batch = self._torch.stack(images).to(self.device)
+        return self._embed([self.transform(Image.open(path).convert("RGB")) for path in paths])
+
+    def embed_bgr(self, image: np.ndarray) -> np.ndarray:
+        from PIL import Image
+
+        rgb = image[:, :, ::-1]
+        return self._embed([self.transform(Image.fromarray(rgb))])
+
+    def _embed(self, tensors: list) -> np.ndarray:
+        batch = self._torch.stack(tensors).to(self.device)
         with self._torch.no_grad():
             features = self.model.forward_features(batch)[:, 0]
         vectors = self._torch.nn.functional.normalize(features, dim=1)

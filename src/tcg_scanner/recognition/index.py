@@ -19,6 +19,47 @@ class IndexResult:
     missing: int
 
 
+@dataclass(frozen=True)
+class ReferenceIndex:
+    vectors: np.ndarray
+    printing_ids: np.ndarray
+    card_codes: list[str]
+
+    def __len__(self) -> int:
+        return len(self.printing_ids)
+
+
+def load_index(conn: sqlite3.Connection, model_name: str) -> ReferenceIndex:
+    rows = conn.execute(
+        """
+        SELECT embedding.vector, embedding.dim, image.printing_id, card.code AS card_code
+        FROM embeddings AS embedding
+        JOIN card_images AS image ON image.id = embedding.card_image_id
+        JOIN printings AS printing ON printing.id = image.printing_id
+        JOIN cards AS card ON card.code = printing.card_code
+        WHERE embedding.model = ? AND embedding.kind = ?
+        ORDER BY embedding.card_image_id
+        """,
+        (model_name, KIND_GLOBAL),
+    ).fetchall()
+
+    if not rows:
+        return ReferenceIndex(
+            vectors=np.zeros((0, 0), dtype=np.float32),
+            printing_ids=np.zeros(0, dtype=np.int64),
+            card_codes=[],
+        )
+
+    vectors = np.stack([from_blob(row["vector"], row["dim"]).astype(np.float32) for row in rows])
+    norms = np.linalg.norm(vectors, axis=1, keepdims=True)
+    vectors /= np.maximum(norms, 1e-6)
+    return ReferenceIndex(
+        vectors=vectors,
+        printing_ids=np.array([row["printing_id"] for row in rows], dtype=np.int64),
+        card_codes=[row["card_code"] for row in rows],
+    )
+
+
 def build_index(
     conn: sqlite3.Connection,
     data_root: Path,

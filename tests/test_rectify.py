@@ -38,3 +38,17 @@ def test_rectify_returns_the_original_when_no_card_is_found():
 
     assert not result.found
     assert result.image.shape == blank.shape
+
+
+def test_rectify_handles_a_contour_with_more_than_four_vertices():
+    canvas = np.full((900, 700, 3), 30, np.uint8)
+    hexagon = np.array(
+        [[350, 80], [620, 220], [620, 660], [350, 800], [80, 660], [80, 220]], np.int32
+    )
+    cv2.fillPoly(canvas, [hexagon], (220, 210, 200))
+    cv2.putText(canvas, "CARD", (170, 450), cv2.FONT_HERSHEY_SIMPLEX, 3, (10, 10, 10), 6)
+
+    result = rectify(canvas)
+
+    assert result.found
+    assert result.image.shape == (CARD_HEIGHT, CARD_WIDTH, 3)

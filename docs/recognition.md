@@ -36,9 +36,9 @@ hoping the model is invariant.
    descriptor plus patch tokens.
 6. **Rank** — cosine kNN over stored reference vectors; scores are aggregated per
    printing across its augmented references.
-7. **Verify** — if the top-1 margin is small, compare patch-token similarity against
-   the top candidates (localized matching tolerates a glare blob). ORB + homography
-   inliers remain an optional tie-breaker if evaluation shows it helps.
+7. **Verify** — not implemented yet: matching ranks on global descriptors alone.
+   Patch-token comparison on a narrow margin and the optional ORB tie-breaker
+   arrive once evaluation shows they are needed.
 8. **Report** — `printing_id`, confidence, and method. The match becomes `owned` only
    after the user confirms it.
 
