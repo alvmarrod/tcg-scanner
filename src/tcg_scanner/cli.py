@@ -4,10 +4,14 @@ import argparse
 import sys
 from collections.abc import Sequence
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from tcg_scanner import config
 from tcg_scanner.catalog import Fetcher, sync_set
 from tcg_scanner.db import init_catalog, init_library, open_catalog
+
+if TYPE_CHECKING:
+    from tcg_scanner.eval.run import Report
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -64,6 +68,13 @@ def build_parser() -> argparse.ArgumentParser:
     owned_list = owned_commands.add_parser("list", help="list the collection with latest prices")
     owned_list.add_argument("--source", default="tcgplayer", choices=["tcgplayer", "cardmarket"])
 
+    evaluation = commands.add_parser("eval", help="score recognition against labeled photos")
+    evaluation.add_argument(
+        "labels", type=Path, nargs="?", default=None, metavar="CSV", help="labels CSV"
+    )
+    evaluation.add_argument("--top", type=int, default=5, metavar="N")
+    evaluation.add_argument("--json", action="store_true", help="print the report as JSON")
+
     return parser
 
 
@@ -80,6 +91,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         ("matches", "reject"): _matches_reject,
         ("owned", "add"): _owned_add,
         ("owned", "list"): _owned_list,
+        ("eval", None): _evaluate,
     }
     handler = handlers.get((args.command, getattr(args, f"{args.command}_command", None)))
     if handler is None:
@@ -334,3 +346,86 @@ def _owned_list(args: argparse.Namespace) -> int:
             f"x{row['quantity']}  {price}"
         )
     return 0
+
+
+def _evaluate(args: argparse.Namespace) -> int:
+    import json
+
+    from tcg_scanner.eval.run import evaluate, load_labels, score_summary
+    from tcg_scanner.imaging.rectify import rectify_file
+    from tcg_scanner.recognition.embed import Embedder
+    from tcg_scanner.recognition.index import load_index
+    from tcg_scanner.recognition.match import identify
+    from tcg_scanner.recognition.ocr import CodeReader
+
+    labels_path = args.labels or (config.data_dir() / "eval" / "labels.csv")
+    try:
+        labels = load_labels(labels_path)
+    except (OSError, ValueError) as error:
+        print(f"{labels_path}: {error}", file=sys.stderr)
+        return 1
+
+    init_catalog(config.catalog_db())
+    conn = open_catalog(config.catalog_db())
+    try:
+        embedder = Embedder()
+        reader = CodeReader()
+        index = load_index(conn, embedder.model_name)
+
+        def predict(image):
+            rectified = rectify_file(image)
+            code = reader.read(rectified.image)
+            query = embedder.embed_bgr(rectified.image)[0]
+            return code, identify(conn, index, query, code=code, top_k=args.top)
+
+        report = evaluate(labels, predict, top_k=args.top)
+    finally:
+        conn.close()
+
+    if args.json:
+        print(json.dumps(_report_dict(report), indent=2))
+        return 0
+
+    print(f"labeled: {report.total} scored, {report.missing} missing")
+    print(f"card top-1:    {report.card_accuracy:.1%}  ({report.card_top1}/{report.total})")
+    print(f"print top-1:   {report.print_accuracy:.1%}  ({report.print_top1}/{report.print_total})")
+    print(
+        f"print top-{args.top}:   {report.print_recall:.1%}  "
+        f"({report.print_top5}/{report.print_total})"
+    )
+    print(f"OCR readable:  {report.ocr_readable_rate:.1%}  ({report.ocr_readable}/{report.total})")
+    print(
+        f"OCR correct:   {report.ocr_accuracy:.1%}  "
+        f"({report.ocr_correct}/{report.ocr_readable} readable)"
+    )
+    print(
+        f"score top-1:   correct {score_summary(report.correct_scores)} | "
+        f"wrong {score_summary(report.wrong_scores)}"
+    )
+    if report.misses:
+        print("misses:")
+        for miss in report.misses:
+            print(f"  {miss.image}  expected {miss.expected}  got {miss.predicted}")
+    else:
+        print("misses: none")
+    return 0
+
+
+def _report_dict(report: Report) -> dict:
+    return {
+        "total": report.total,
+        "missing": report.missing,
+        "card_top1": {"count": report.card_top1, "rate": report.card_accuracy},
+        "print_top1": {"count": report.print_top1, "rate": report.print_accuracy},
+        "print_top5": {"count": report.print_top5, "rate": report.print_recall},
+        "ocr_readable": {"count": report.ocr_readable, "rate": report.ocr_readable_rate},
+        "ocr_correct": {"count": report.ocr_correct, "rate": report.ocr_accuracy},
+        "scores": {
+            "correct": list(report.correct_scores),
+            "wrong": list(report.wrong_scores),
+        },
+        "misses": [
+            {"image": miss.image, "expected": miss.expected, "predicted": miss.predicted}
+            for miss in report.misses
+        ],
+    }

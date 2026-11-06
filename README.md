@@ -67,6 +67,7 @@ uv run tcg-scanner inspect path/to/photo.jpg
 uv run tcg-scanner identify path/to/photo.jpg
 uv run tcg-scanner matches accept 12
 uv run tcg-scanner owned list
+uv run tcg-scanner eval data/eval/labels.csv
 ```
 
 `catalog sync` needs network access. It stores the set's cards, printings, prices and
@@ -87,6 +88,11 @@ when it can be read.
 collection; `matches reject <id>` closes it without touching the collection.
 `owned list` shows the collection with the latest catalog prices, and
 `owned add <card_code> <print_index>` adds a card by hand.
+
+`eval` scores recognition against a labels CSV with `image,card_code,print_index`
+(paths relative to the CSV; `print_index` is optional). It reports card and printing
+accuracy, OCR rates, the top-1 score distribution for correct vs. wrong matches, and
+the misses. `--json` emits the same report as JSON.
 
 ## Development
 
@@ -118,6 +124,6 @@ data/              local only, git-ignored
 
 ## Status
 
-Phases 1–6 are in place: storage, catalog sync, the DINOv2 index, rectification, OCR,
-matching, and match confirmation into an owned collection. Evaluation is next.
-Python 3.14.
+Phases 1–7 are in place: storage, catalog sync, the DINOv2 index, rectification, OCR,
+matching, match confirmation, and the evaluation harness. The harness still needs a
+labeled set of real photos before model and threshold decisions. Python 3.14.
