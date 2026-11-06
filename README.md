@@ -60,6 +60,8 @@ uv run tcg-scanner catalog sync --set OP08 --no-images
 uv run tcg-scanner index build
 uv run tcg-scanner inspect path/to/photo.jpg
 uv run tcg-scanner identify path/to/photo.jpg
+uv run tcg-scanner matches accept 12
+uv run tcg-scanner owned list
 ```
 
 `catalog sync` needs network access. It stores the set's cards, printings, prices and
@@ -75,6 +77,11 @@ and reads the card code. The first run downloads the EasyOCR models (~100 MB).
 `identify` rectifies, reads the code, ranks printings against the reference index and
 records the attempt in `library.db` as a pending match. The code is used as a filter
 when it can be read.
+
+`matches accept <id>` marks a pending match accepted and adds its printing to the
+collection; `matches reject <id>` closes it without touching the collection.
+`owned list` shows the collection with the latest catalog prices, and
+`owned add <printing_id>` adds a card by hand.
 
 ## Development
 

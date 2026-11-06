@@ -41,3 +41,8 @@ def open_catalog(path: Path) -> sqlite3.Connection:
 
 def open_library(path: Path) -> sqlite3.Connection:
     return connect(path)
+
+
+def attach_catalog(conn: sqlite3.Connection, path: Path) -> None:
+    """Expose catalog.db as `catalog.*` so library queries can join prices."""
+    conn.execute("ATTACH DATABASE ? AS catalog", (str(path),))

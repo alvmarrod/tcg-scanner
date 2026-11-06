@@ -40,6 +40,29 @@ def build_parser() -> argparse.ArgumentParser:
     identify.add_argument("image", type=Path, metavar="IMAGE")
     identify.add_argument("--top", type=int, default=5, metavar="N")
 
+    matches = commands.add_parser("matches", help="accept or reject recorded matches")
+    matches_commands = matches.add_subparsers(dest="matches_command", required=True)
+    accept = matches_commands.add_parser(
+        "accept", help="accept a match and add it to the collection"
+    )
+    accept.add_argument("match_id", type=int)
+    accept.add_argument("--quantity", type=int, default=1)
+    reject = matches_commands.add_parser("reject", help="reject a pending match")
+    reject.add_argument("match_id", type=int)
+
+    owned = commands.add_parser("owned", help="manage the owned collection")
+    owned_commands = owned.add_subparsers(dest="owned_command", required=True)
+    owned_add = owned_commands.add_parser("add", help="add a printing to the collection")
+    owned_add.add_argument("printing_id", type=int)
+    owned_add.add_argument("--quantity", type=int, default=1)
+    owned_add.add_argument("--condition")
+    owned_add.add_argument("--language")
+    owned_add.add_argument("--paid", type=float, dest="paid_price")
+    owned_add.add_argument("--currency")
+    owned_add.add_argument("--note")
+    owned_list = owned_commands.add_parser("list", help="list the collection with latest prices")
+    owned_list.add_argument("--source", default="tcgplayer", choices=["tcgplayer", "cardmarket"])
+
     return parser
 
 
@@ -52,6 +75,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         ("index", "build"): _index_build,
         ("inspect", None): _inspect,
         ("identify", None): _identify,
+        ("matches", "accept"): _matches_accept,
+        ("matches", "reject"): _matches_reject,
+        ("owned", "add"): _owned_add,
+        ("owned", "list"): _owned_list,
     }
     handler = handlers.get((args.command, getattr(args, f"{args.command}_command", None)))
     if handler is None:
@@ -188,4 +215,106 @@ def _identify(args: argparse.Namespace) -> int:
     elif len(candidates) > 1:
         print(f"margin: {candidates[0].score - candidates[1].score:.3f}")
     print(f"match {match_id} (pending)")
+    return 0
+
+
+def _open_library_with_catalog():
+    from tcg_scanner.db import attach_catalog, open_library
+
+    init_catalog(config.catalog_db())
+    init_library(config.library_db())
+    conn = open_library(config.library_db())
+    attach_catalog(conn, config.catalog_db())
+    return conn
+
+
+def _describe_printing(row) -> str:
+    if row is None:
+        return "unknown printing"
+    return f"{row['card_code']} {row['card_name']} ({row['set_code']}, {row['variant_label']})"
+
+
+def _matches_accept(args: argparse.Namespace) -> int:
+    from tcg_scanner.db.library import accept_match, get_printing
+
+    conn = _open_library_with_catalog()
+    try:
+        printing_id = accept_match(conn, args.match_id, quantity=args.quantity)
+        printing = get_printing(conn, printing_id)
+        conn.commit()
+    except ValueError as error:
+        print(error, file=sys.stderr)
+        return 1
+    finally:
+        conn.close()
+
+    print(f"accepted match {args.match_id}: {_describe_printing(printing)}")
+    print(f"added {args.quantity} to the collection")
+    return 0
+
+
+def _matches_reject(args: argparse.Namespace) -> int:
+    from tcg_scanner.db.library import reject_match
+
+    conn = _open_library_with_catalog()
+    try:
+        reject_match(conn, args.match_id)
+        conn.commit()
+    except ValueError as error:
+        print(error, file=sys.stderr)
+        return 1
+    finally:
+        conn.close()
+
+    print(f"rejected match {args.match_id}")
+    return 0
+
+
+def _owned_add(args: argparse.Namespace) -> int:
+    from tcg_scanner.db.library import add_owned, get_printing
+
+    conn = _open_library_with_catalog()
+    try:
+        owned_id = add_owned(
+            conn,
+            printing_id=args.printing_id,
+            quantity=args.quantity,
+            condition=args.condition,
+            language=args.language,
+            paid_price=args.paid_price,
+            currency=args.currency,
+            note=args.note,
+        )
+        printing = get_printing(conn, args.printing_id)
+        conn.commit()
+    except ValueError as error:
+        print(error, file=sys.stderr)
+        return 1
+    finally:
+        conn.close()
+
+    print(f"owned {owned_id}: {_describe_printing(printing)} x{args.quantity}")
+    return 0
+
+
+def _owned_list(args: argparse.Namespace) -> int:
+    from tcg_scanner.db.library import list_owned
+
+    conn = _open_library_with_catalog()
+    try:
+        rows = list_owned(conn, source=args.source)
+    finally:
+        conn.close()
+
+    if not rows:
+        print("collection is empty")
+        return 0
+
+    for position, row in enumerate(rows, start=1):
+        price = "-" if row["price"] is None else f"{row['price']:.2f} {row['currency']}"
+        print(
+            f"{position:>2}. {row['card_code'] or '?'}  {row['card_name'] or '?'}  "
+            f"({row['set_code'] or '?'}, {row['variant_label'] or '?'})  "
+            f"x{row['quantity']}  {price}"
+        )
     return 0
