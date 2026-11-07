@@ -14,6 +14,7 @@ import httpx
 
 from tcg_scanner.catalog.fetch import Fetcher
 from tcg_scanner.catalog.parse import (
+    ParsedSet,
     base_image_url,
     parse_cards,
     parse_index,
@@ -23,6 +24,7 @@ from tcg_scanner.db import catalog
 from tcg_scanner.images import store_image
 
 Progress = Callable[[int, int], None]
+PrintingKey = tuple[str, int]
 
 
 @dataclass(frozen=True)
@@ -41,6 +43,14 @@ class PriceRefresh:
     unknown: int
 
 
+@dataclass
+class _Counts:
+    cards: int = 0
+    printings: int = 0
+    prices: int = 0
+    images: int = 0
+
+
 def sync_set(
     conn: sqlite3.Connection,
     set_code: str,
@@ -52,13 +62,91 @@ def sync_set(
     workers: int = 4,
     on_progress: Progress | None = None,
 ) -> SyncResult:
-    set_code = set_code.upper()
-    known = {entry.code: entry for entry in parse_index(fetcher.text("/cards"))}
-    target = known.get(set_code)
-    if target is None:
-        raise ValueError(f"unknown set code: {set_code}")
+    return sync_sets(
+        conn,
+        [set_code],
+        fetcher,
+        data_root,
+        with_images=with_images,
+        now=now,
+        workers=workers,
+        on_progress=on_progress,
+    )[0]
 
-    for entry in known.values():
+
+def sync_sets(
+    conn: sqlite3.Connection,
+    set_codes: list[str],
+    fetcher: Fetcher,
+    data_root: Path,
+    *,
+    with_images: bool = True,
+    now: str | None = None,
+    workers: int = 4,
+    on_progress: Progress | None = None,
+) -> list[SyncResult]:
+    entries = parse_index(fetcher.text("/cards"))
+    known = {entry.code: entry for entry in entries}
+    targets: list[ParsedSet] = []
+    seen: set[str] = set()
+    for code in set_codes:
+        entry = known.get(code.upper())
+        if entry is None:
+            raise ValueError(f"unknown set code: {code}")
+        if entry.code not in seen:
+            seen.add(entry.code)
+            targets.append(entry)
+    return _sync_entries(
+        conn,
+        targets,
+        entries,
+        fetcher,
+        data_root,
+        with_images=with_images,
+        now=now,
+        workers=workers,
+        on_progress=on_progress,
+    )
+
+
+def sync_all(
+    conn: sqlite3.Connection,
+    fetcher: Fetcher,
+    data_root: Path,
+    *,
+    with_images: bool = True,
+    now: str | None = None,
+    workers: int = 4,
+    on_progress: Progress | None = None,
+) -> list[SyncResult]:
+    entries = parse_index(fetcher.text("/cards"))
+    targets = [entry for entry in entries if entry.kind in ("booster", "starter")]
+    return _sync_entries(
+        conn,
+        targets,
+        entries,
+        fetcher,
+        data_root,
+        with_images=with_images,
+        now=now,
+        workers=workers,
+        on_progress=on_progress,
+    )
+
+
+def _sync_entries(
+    conn: sqlite3.Connection,
+    targets: list[ParsedSet],
+    entries: list[ParsedSet],
+    fetcher: Fetcher,
+    data_root: Path,
+    *,
+    with_images: bool,
+    now: str | None,
+    workers: int,
+    on_progress: Progress | None,
+) -> list[SyncResult]:
+    for entry in entries:
         catalog.upsert_set(
             conn,
             code=entry.code,
@@ -67,73 +155,88 @@ def sync_set(
             release_date=entry.release_date,
         )
 
-    by_name = {entry.name: entry.code for entry in known.values()}
-    cards = parse_cards(fetcher.text(f"/cards/{target.slug}?display=full"))
+    by_name = {entry.name: entry.code for entry in entries}
+    known_codes = set(by_name.values())
     fetched_at = now or datetime.now(UTC).isoformat(timespec="seconds")
-    printings = prices = images = 0
-    image_jobs: list[tuple[tuple[str, int], str]] = []
+    counts = {entry.code: _Counts() for entry in targets}
+    jobs: dict[PrintingKey, str] = {}
+    owners: dict[PrintingKey, str] = {}
 
-    for card in cards:
-        card_set = card.code.split("-")[0]
-        if card_set not in known:
-            card_set = set_code
-        catalog.upsert_card(conn, card, card_set)
+    for entry in targets:
+        cards = parse_cards(fetcher.text(f"/cards/{entry.slug}?display=full"))
+        counts[entry.code].cards = len(cards)
 
-        base_image = base_image_url(card.image_url)
-        for printing in card.printings:
-            printing_set = _set_for_name(conn, printing.set_name, by_name)
-            image_url = (
-                card.image_url
-                if printing.current
-                else variant_image_url(base_image, printing.print_index)
-            )
-            printing_key = catalog.upsert_printing(
-                conn,
-                card_code=card.code,
-                set_code=printing_set,
-                variant_label=printing.variant_label,
-                print_index=printing.print_index,
-                image_url=image_url,
-                tcgplayer_id=printing.tcgplayer_id,
-                cardmarket_id=printing.cardmarket_id,
-            )
-            printings += 1
+        for card in cards:
+            card_set = card.code.split("-")[0]
+            if card_set not in known_codes:
+                card_set = entry.code
+            catalog.upsert_card(conn, card, card_set)
 
-            for source, currency, amount in (
-                ("tcgplayer", "USD", printing.usd),
-                ("cardmarket", "EUR", printing.eur),
-            ):
-                if amount is not None and catalog.add_price(
+            base_image = base_image_url(card.image_url)
+            for printing in card.printings:
+                printing_set = _set_for_name(conn, printing.set_name, by_name)
+                image_url = (
+                    card.image_url
+                    if printing.current
+                    else variant_image_url(base_image, printing.print_index)
+                )
+                printing_key = catalog.upsert_printing(
                     conn,
-                    card_code=printing_key[0],
-                    print_index=printing_key[1],
-                    source=source,
-                    currency=currency,
-                    amount=amount,
-                    fetched_at=fetched_at,
-                ):
-                    prices += 1
+                    card_code=card.code,
+                    set_code=printing_set,
+                    variant_label=printing.variant_label,
+                    print_index=printing.print_index,
+                    image_url=image_url,
+                    tcgplayer_id=printing.tcgplayer_id,
+                    cardmarket_id=printing.cardmarket_id,
+                )
+                counts[entry.code].printings += 1
 
-            if with_images and not catalog.has_reference_image(conn, *printing_key):
-                image_jobs.append((printing_key, image_url))
+                for source, currency, amount in (
+                    ("tcgplayer", "USD", printing.usd),
+                    ("cardmarket", "EUR", printing.eur),
+                ):
+                    if amount is not None and catalog.add_price(
+                        conn,
+                        card_code=printing_key[0],
+                        print_index=printing_key[1],
+                        source=source,
+                        currency=currency,
+                        amount=amount,
+                        fetched_at=fetched_at,
+                    ):
+                        counts[entry.code].prices += 1
+
+                if (
+                    with_images
+                    and printing_key not in jobs
+                    and not catalog.has_reference_image(conn, *printing_key)
+                ):
+                    jobs[printing_key] = image_url
+                    owners[printing_key] = entry.code
 
     conn.commit()
-    images = _download_images(
+    for key in _download_images(
         conn,
         fetcher,
         data_root,
-        image_jobs,
+        list(jobs.items()),
         workers=workers,
         on_progress=on_progress,
-    )
+    ):
+        counts[owners[key]].images += 1
     conn.commit()
-    return SyncResult(
-        set_code=set_code,
-        cards=len(cards),
-        printings=printings,
-        prices=prices,
-        images=images,
-    )
+
+    return [
+        SyncResult(
+            set_code=entry.code,
+            cards=counts[entry.code].cards,
+            printings=counts[entry.code].printings,
+            prices=counts[entry.code].prices,
+            images=counts[entry.code].images,
+        )
+        for entry in targets
+    ]
 
 
 def refresh_prices(
@@ -160,7 +263,7 @@ def refresh_prices(
         (row[0], row[1]) for row in conn.execute("SELECT card_code, print_index FROM printings")
     }
     prices = 0
-    unknown: set[tuple[str, int]] = set()
+    unknown: set[PrintingKey] = set()
 
     for code in targets:
         entry = index.get(code)
@@ -208,15 +311,15 @@ def _download_images(
     conn: sqlite3.Connection,
     fetcher: Fetcher,
     data_root: Path,
-    jobs: list[tuple[tuple[str, int], str]],
+    jobs: list[tuple[PrintingKey, str]],
     *,
     workers: int,
     on_progress: Progress | None,
-) -> int:
+) -> list[PrintingKey]:
     if not jobs:
-        return 0
+        return []
 
-    downloaded = 0
+    downloaded: list[PrintingKey] = []
     with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
         futures = {pool.submit(fetcher.content, url): (key, url) for key, url in jobs}
         for future in as_completed(futures):
@@ -238,7 +341,7 @@ def _download_images(
                 path=path.relative_to(data_root).as_posix(),
                 sha256=digest,
             )
-            downloaded += 1
+            downloaded.append(printing_key)
             if on_progress is not None:
-                on_progress(downloaded, len(jobs))
+                on_progress(len(downloaded), len(jobs))
     return downloaded

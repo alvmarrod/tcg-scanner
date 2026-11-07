@@ -67,7 +67,8 @@ baseline; later changes are ordered migrations in `db/conn.py` and run on open.
 ```sh
 uv run tcg-scanner db init
 uv run tcg-scanner db check
-uv run tcg-scanner catalog sync --set OP08
+uv run tcg-scanner catalog sync --set OP01 --set OP02
+uv run tcg-scanner catalog sync --all
 uv run tcg-scanner catalog sync --set OP08 --no-images
 uv run tcg-scanner prices refresh
 uv run tcg-scanner index build
@@ -81,10 +82,12 @@ uv run tcg-scanner owned remove 3
 uv run tcg-scanner eval data/eval/labels.csv
 ```
 
-`catalog sync` needs network access. It stores the set's cards, printings, prices and
-reference images under `data/`, and is incremental: re-running adds only new price
-points and missing images. Image downloads use a small worker pool while request
-starts stay throttled.
+`catalog sync` needs network access. `--set` is repeatable and `--all` walks every
+booster and starter product in the index, sharing one index fetch. It stores the
+set's cards, printings, prices and reference images under `data/`, and is incremental:
+re-running adds only new price points and missing images. Image downloads use a small
+worker pool while request starts stay throttled. Promos and Japanese printings are not
+synced yet.
 
 `db check` reports owned rows and open matches whose printing no longer resolves
 against the catalog, missing or unreferenced image files, and reference images without

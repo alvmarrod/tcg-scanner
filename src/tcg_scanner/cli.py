@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from tcg_scanner import config
-from tcg_scanner.catalog import Fetcher, sync_set
+from tcg_scanner.catalog import Fetcher, sync_all, sync_sets
 from tcg_scanner.db import init_catalog, init_library, open_catalog
 
 if TYPE_CHECKING:
@@ -28,8 +28,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     catalog = commands.add_parser("catalog", help="sync card reference data")
     catalog_commands = catalog.add_subparsers(dest="catalog_command", required=True)
-    sync = catalog_commands.add_parser("sync", help="sync one set from the card database")
-    sync.add_argument("--set", required=True, metavar="CODE", help="set code, e.g. OP08")
+    sync = catalog_commands.add_parser("sync", help="sync sets from the card database")
+    choose = sync.add_mutually_exclusive_group(required=True)
+    choose.add_argument(
+        "--set", action="append", metavar="CODE", help="set code, e.g. OP08 (repeatable)"
+    )
+    choose.add_argument("--all", action="store_true", help="every booster and starter set")
     sync.add_argument("--no-images", action="store_true", help="skip downloading card images")
 
     prices = commands.add_parser("prices", help="refresh price history")
@@ -177,24 +181,32 @@ def _catalog_sync(args: argparse.Namespace) -> int:
     conn = open_catalog(config.catalog_db())
     try:
         with Fetcher() as fetcher:
-            result = sync_set(
-                conn,
-                args.set,
-                fetcher,
-                config.data_dir(),
-                with_images=not args.no_images,
-                on_progress=_progress("images"),
-            )
+            common = {
+                "with_images": not args.no_images,
+                "on_progress": _progress("images"),
+            }
+            if args.all:
+                results = sync_all(conn, fetcher, config.data_dir(), **common)
+            else:
+                results = sync_sets(conn, args.set, fetcher, config.data_dir(), **common)
     except ValueError as error:
         print(error, file=sys.stderr)
         return 1
     finally:
         conn.close()
 
-    print(
-        f"{result.set_code}: {result.cards} cards, {result.printings} printings, "
-        f"{result.prices} price points, {result.images} images"
-    )
+    for result in results:
+        print(
+            f"{result.set_code}: {result.cards} cards, {result.printings} printings, "
+            f"{result.prices} price points, {result.images} images"
+        )
+    if len(results) > 1:
+        print(
+            f"total: {sum(result.cards for result in results)} cards, "
+            f"{sum(result.printings for result in results)} printings, "
+            f"{sum(result.prices for result in results)} price points, "
+            f"{sum(result.images for result in results)} images"
+        )
     return 0
 
 

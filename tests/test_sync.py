@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from tcg_scanner.catalog.sync import sync_set
+from tcg_scanner.catalog.sync import sync_all, sync_set, sync_sets
 from tcg_scanner.db import init_catalog, open_catalog
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -101,5 +101,37 @@ def test_unknown_set_code_raises(tmp_path):
             assert "NOPE" in str(error)
         else:
             raise AssertionError("expected ValueError")
+    finally:
+        conn.close()
+
+
+def test_sync_sets_deduplicates_codes(tmp_path):
+    db_path = tmp_path / "catalog.db"
+    init_catalog(db_path)
+    conn = open_catalog(db_path)
+    try:
+        results = sync_sets(
+            conn, ["OP08", "op08"], FakeFetcher(_pages()), tmp_path, now="2026-01-01T00:00:00Z"
+        )
+        assert [result.set_code for result in results] == ["OP08"]
+    finally:
+        conn.close()
+
+
+def test_sync_all_covers_every_booster_and_starter(tmp_path):
+    class AnyPageFetcher(FakeFetcher):
+        def text(self, path: str) -> str:
+            if path == "/cards":
+                return self.pages["/cards"]
+            return self.pages["/cards/op08-two-legends?display=full"]
+
+    db_path = tmp_path / "catalog.db"
+    init_catalog(db_path)
+    conn = open_catalog(db_path)
+    try:
+        results = sync_all(conn, AnyPageFetcher(_pages()), tmp_path, now="2026-01-01T00:00:00Z")
+
+        assert {result.set_code for result in results} == {"EB05", "OP08", "OP01", "ST36"}
+        assert sum(result.images for result in results) == 4
     finally:
         conn.close()
