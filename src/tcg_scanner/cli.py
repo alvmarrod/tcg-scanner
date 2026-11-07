@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from tcg_scanner import config
-from tcg_scanner.catalog import Fetcher, sync_all, sync_sets
+from tcg_scanner.catalog import Fetcher, sync_all, sync_promos, sync_sets
 from tcg_scanner.db import init_catalog, init_library, open_catalog
 
 if TYPE_CHECKING:
@@ -34,6 +34,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--set", action="append", metavar="CODE", help="set code, e.g. OP08 (repeatable)"
     )
     choose.add_argument("--all", action="store_true", help="every booster and starter set")
+    choose.add_argument("--promos", action="store_true", help="every promo product")
     sync.add_argument(
         "--lang",
         default="jp",
@@ -194,6 +195,8 @@ def _catalog_sync(args: argparse.Namespace) -> int:
             }
             if args.all:
                 results = sync_all(conn, fetcher, config.data_dir(), **common)
+            elif args.promos:
+                results = sync_promos(conn, fetcher, config.data_dir(), **common)
             else:
                 results = sync_sets(conn, args.set, fetcher, config.data_dir(), **common)
     except ValueError as error:

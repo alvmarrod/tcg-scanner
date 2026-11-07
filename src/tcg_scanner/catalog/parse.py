@@ -82,6 +82,39 @@ def parse_index(html: str) -> list[ParsedSet]:
     return sets
 
 
+def parse_promos(html: str) -> list[ParsedSet]:
+    """Promo products are a separate index with no set codes; synthesize one."""
+    soup = BeautifulSoup(html, "html.parser")
+    table = soup.find("table", class_="sets-table")
+    if table is None:
+        return []
+
+    promos: list[ParsedSet] = []
+    for row in table.find_all("tr"):
+        cell = row.find("td", class_="promo")
+        link = cell.find("a", href=True) if cell else None
+        if link is None:
+            continue
+        cells = row.find_all("td")
+        name = link.get_text(strip=True)
+        promos.append(
+            ParsedSet(
+                code=synthetic_set_code(name),
+                name=name,
+                kind="promo",
+                release_date=(
+                    _release_date(cells[1].get_text(strip=True)) if len(cells) > 1 else None
+                ),
+                slug=link["href"].removeprefix("/cards/"),
+            )
+        )
+    return promos
+
+
+def synthetic_set_code(name: str) -> str:
+    return "X-" + re.sub(r"[^A-Z0-9]+", "-", name.upper()).strip("-")[:60]
+
+
 def parse_cards(html: str) -> list[ParsedCard]:
     """Parse one entry per card, preferring its base-print image.
 
@@ -170,27 +203,37 @@ def _parse_printings(container: Tag, entry_image: str) -> list[ParsedPrinting]:
     if table is None:
         return []
 
-    printings: list[ParsedPrinting] = []
-    for row in table.find_all("tr"):
-        cells = row.find_all("td")
-        if len(cells) < 3:
-            continue
+    rows = [row for row in table.find_all("tr") if len(row.find_all("td")) >= 3]
+    # On promo product pages the current row is the base print, the product print
+    # links to its shop page, and the card image belongs to the product print.
+    product_page = any(
+        (link := row.find("td").find("a", href=True)) is not None
+        and not link["href"].startswith("/cards/")
+        for row in rows
+    )
 
+    printings: list[ParsedPrinting] = []
+    for row in rows:
+        cells = row.find_all("td")
         cell = cells[0]
         label = cell.find("span", class_="prints-table-card-number")
         variant = label.get_text(strip=True) if label else ""
         if label:
             label.extract()
-        link = cell.find("a")
-        href = link.get("href") if link else None
+        link = cell.find("a", href=True)
+        href = link["href"] if link else None
         current = "current" in (row.get("class") or [])
         if href and "?v=" in href:
             index = _variant_index(href)
-        elif href:
+        elif href and href.startswith("/cards/"):
             index = 0
-        else:
-            # The current print has no link; its ordinal is the entry image's suffix.
+        elif href:
+            # External product link: the print shown by this page.
             index = _image_rank(entry_image)
+        else:
+            # The current print has no link; its ordinal is the entry image's suffix,
+            # except on product pages where the current row is the base print.
+            index = 0 if product_page else _image_rank(entry_image)
 
         printings.append(
             ParsedPrinting(
@@ -225,10 +268,12 @@ def _int(text: str, pattern: str) -> int | None:
 
 
 def _release_date(text: str) -> str | None:
-    try:
-        return datetime.strptime(text, "%d %b %y").date().isoformat()
-    except ValueError:
-        return None
+    for pattern in ("%d %b %y", "%b %y"):
+        try:
+            return datetime.strptime(text, pattern).date().isoformat()
+        except ValueError:
+            continue
+    return None
 
 
 def _variant_index(href: str | None) -> int | None:

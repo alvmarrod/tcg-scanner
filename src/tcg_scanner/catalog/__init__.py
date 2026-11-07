@@ -4,6 +4,7 @@ from tcg_scanner.catalog.sync import (
     SyncResult,
     refresh_prices,
     sync_all,
+    sync_promos,
     sync_set,
     sync_sets,
 )
@@ -14,6 +15,7 @@ __all__ = [
     "SyncResult",
     "refresh_prices",
     "sync_all",
+    "sync_promos",
     "sync_set",
     "sync_sets",
 ]

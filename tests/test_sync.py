@@ -5,6 +5,7 @@ import httpx
 from tcg_scanner.catalog.sync import (
     _download_images,
     sync_all,
+    sync_promos,
     sync_set,
     sync_sets,
 )
@@ -257,5 +258,33 @@ def test_second_language_keeps_the_printing_identity(tmp_path):
         assert conn.execute("SELECT COUNT(*) FROM card_images").fetchone()[0] == 8
         languages = {row[0] for row in conn.execute("SELECT DISTINCT language FROM card_images")}
         assert languages == {"en", "jp"}
+    finally:
+        conn.close()
+
+
+def test_sync_promos_keeps_base_and_promo_prints_distinct(tmp_path):
+    def pages() -> dict[str, str]:
+        return {
+            "/cards": (FIXTURES / "op08_index.html").read_text(),
+            "/cards/promos": (FIXTURES / "promos_index.html").read_text(),
+            "/cards/tournament-pack-16?display=full": (
+                FIXTURES / "promo_products.html"
+            ).read_text(),
+        }
+
+    db_path = tmp_path / "catalog.db"
+    init_catalog(db_path)
+    conn = open_catalog(db_path)
+    try:
+        results = sync_promos(conn, FakeFetcher(pages()), tmp_path, now="2026-01-01T00:00:00Z")
+
+        assert [result.set_code for result in results] == ["X-TOURNAMENT-PACK-2026-VOL-4"]
+        urls = {
+            (row[0], row[1]): row[2]
+            for row in conn.execute("SELECT card_code, print_index, image_url FROM printings")
+        }
+        assert urls[("OP09-099", 0)].endswith("OP09-099_JP.webp")
+        assert urls[("OP09-099", 1)].endswith("OP09-099_p1_JP.webp")
+        assert urls[("OP09-099", 2)].endswith("OP09-099_p2_JP.webp")
     finally:
         conn.close()

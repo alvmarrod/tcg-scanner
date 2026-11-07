@@ -33,7 +33,7 @@ User data and reference data follow different rules:
 Source: <https://onepiece.limitlesstcg.com/cards>
 
 - Products: booster sets (`OP*`, `EB*`, `PRB*`), starter decks (`ST*`), and a separate
-  promos page.
+  promos index whose products are reprints with their own print entries.
 - Per card: card code (e.g. `OP01-001`), name, type, color, cost, power, and links
   to TCGplayer and Cardmarket prices.
 - The source does not expose rarity; print labels (`aa`, …) are what distinguish
@@ -72,6 +72,7 @@ uv run tcg-scanner db init
 uv run tcg-scanner db check
 uv run tcg-scanner catalog sync --set OP01 --set OP02
 uv run tcg-scanner catalog sync --all
+uv run tcg-scanner catalog sync --promos
 uv run tcg-scanner catalog sync --set OP08 --no-images
 uv run tcg-scanner prices refresh
 uv run tcg-scanner index build
@@ -85,8 +86,8 @@ uv run tcg-scanner owned remove 3
 uv run tcg-scanner eval data/eval/labels.csv
 ```
 
-`catalog sync` needs network access. `--set` is repeatable and `--all` walks every
-booster and starter product in the index, sharing one index fetch. It stores the
+`catalog sync` needs network access. `--set` is repeatable, `--all` walks every
+booster and starter product, and `--promos` walks the separate promo-product index. It stores the
 set's cards, printings, prices and reference images under `data/`, and is incremental:
 re-running adds only new price points and missing images. Image downloads use a small
 worker pool while request starts stay throttled.

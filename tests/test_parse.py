@@ -5,6 +5,7 @@ from tcg_scanner.catalog.parse import (
     language_image_url,
     parse_cards,
     parse_index,
+    parse_promos,
     variant_image_url,
 )
 
@@ -79,3 +80,29 @@ def test_language_image_url_swaps_the_language_suffix():
         == "https://cdn.example/one-piece/OP08/OP08-001_p2_JP.webp"
     )
     assert language_image_url(variant, "en") == variant
+
+
+def test_parse_promos_reads_products():
+    promos = parse_promos((FIXTURES / "promos_index.html").read_text())
+
+    assert len(promos) == 1
+    promo = promos[0]
+    assert promo.code == "X-TOURNAMENT-PACK-2026-VOL-4"
+    assert promo.name == "Tournament Pack 2026 Vol.4"
+    assert promo.kind == "promo"
+    assert promo.release_date == "2026-10-01"
+    assert promo.slug == "tournament-pack-16"
+
+
+def test_parse_promo_product_page_maps_the_product_print():
+    cards = {
+        card.code: card for card in parse_cards((FIXTURES / "promo_products.html").read_text())
+    }
+
+    printings = cards["OP09-099"].printings
+
+    assert [(printing.print_index, printing.set_name) for printing in printings][:3] == [
+        (0, "Emperors in the New World"),
+        (1, "Tournament Pack 2026 Vol.4"),
+        (2, "Tournament Pack 2026 Vol.4"),
+    ]

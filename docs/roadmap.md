@@ -9,7 +9,7 @@ Legend: ⬜ not started · ✅ done
 4. ✅ **[I] CI** — GitHub Actions running `uv sync`, ruff and pytest. Cheap, and the only thing protecting 50 tests from silent rot.
 5. ⬜ **[I] `matches list`** — list pending/accepted/rejected matches; right now the only way to accept is to remember the id printed by `identify`.
 6. ⬜ **[I] Batch input over `data/input/`** — run identification over a folder and write one result per photo. The original use case is a set of pictures, not one.
-7. ⬜ **[D/I] Full catalog coverage** — `catalog sync --all`, promos, Japanese; verify the parser on sets whose print layouts differ (ST, EB, PRB) instead of only OP08.
+7. ✅ **[D/I] Full catalog coverage** — `catalog sync --all`, promos, Japanese; verify the parser on sets whose print layouts differ (ST, EB, PRB) instead of only OP08.
 8. ⬜ **[Dsn] Multi-photo grouping** — how several photos of the same card combine before matching: aggregate scores, use the best, front/back, discard blurry duplicates. Currently one photo equals one match.
 9. ✅ **[I] Price refresh path** — re-syncing a set already appends prices, but there's no lightweight "refresh all prices" and no cadence.
 10. ✅ **[I] Collection ergonomics** — merge quantity on repeat accept, edit/delete owned rows, condition/language defaults, total collection value.

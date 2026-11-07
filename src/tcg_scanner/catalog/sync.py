@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 import sqlite3
 import sys
 from collections.abc import Callable
@@ -19,6 +18,8 @@ from tcg_scanner.catalog.parse import (
     language_image_url,
     parse_cards,
     parse_index,
+    parse_promos,
+    synthetic_set_code,
     variant_image_url,
 )
 from tcg_scanner.db import catalog
@@ -184,10 +185,7 @@ def _sync_entries(
             for printing in card.printings:
                 printing_set = _set_for_name(conn, printing.set_name, by_name)
                 image_url = language_image_url(
-                    card.image_url
-                    if printing.current
-                    else variant_image_url(base_image, printing.print_index),
-                    language,
+                    variant_image_url(base_image, printing.print_index), language
                 )
                 printing_key = catalog.upsert_printing(
                     conn,
@@ -247,6 +245,33 @@ def _sync_entries(
         )
         for entry in targets
     ]
+
+
+def sync_promos(
+    conn: sqlite3.Connection,
+    fetcher: Fetcher,
+    data_root: Path,
+    *,
+    language: str = "jp",
+    with_images: bool = True,
+    now: str | None = None,
+    workers: int = 4,
+    on_progress: Progress | None = None,
+) -> list[SyncResult]:
+    entries = parse_index(fetcher.text("/cards"))
+    promos = parse_promos(fetcher.text("/cards/promos"))
+    return _sync_entries(
+        conn,
+        promos,
+        entries + promos,
+        fetcher,
+        data_root,
+        language=language,
+        with_images=with_images,
+        now=now,
+        workers=workers,
+        on_progress=on_progress,
+    )
 
 
 def refresh_prices(
@@ -312,7 +337,7 @@ def _set_for_name(conn: sqlite3.Connection, name: str, by_name: dict[str, str]) 
 
     # Reprinted in a product outside the sets index (promo/collection sets).
     # A synthetic code keeps the foreign key and the printing key honest.
-    code = "X-" + re.sub(r"[^A-Z0-9]+", "-", name.upper()).strip("-")[:60]
+    code = synthetic_set_code(name)
     catalog.upsert_set(conn, code=code, name=name, kind="promo", release_date=None)
     return code
 
