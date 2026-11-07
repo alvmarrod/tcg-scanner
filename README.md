@@ -34,14 +34,17 @@ Source: <https://onepiece.limitlesstcg.com/cards>
 
 - Products: booster sets (`OP*`, `EB*`, `PRB*`), starter decks (`ST*`), and a separate
   promos page.
-- Per card: card code (e.g. `OP01-001`), name, rarity, color, cost, power, and links
+- Per card: card code (e.g. `OP01-001`), name, type, color, cost, power, and links
   to TCGplayer and Cardmarket prices.
+- The source does not expose rarity; print labels (`aa`, …) are what distinguish
+  variants.
 
 Art variants (alternate arts, alternate rarities) can share a card code, so the unit
 that is recognized, stored and priced is the *printing*, not the card.
 
 Card images and text are Eiichiro Oda / Shueisha, Toei Animation and Bandai copyright.
-Anything downloaded is for local matching only, not redistribution.
+Anything downloaded is for local matching only, not redistribution. Requests are
+throttled; sync one set at a time and do not hammer the source.
 
 ## Storage
 
@@ -109,6 +112,16 @@ uv run pre-commit run --all-files
 uv run ruff check .
 uv run pytest
 ```
+
+## Install as a tool
+
+```sh
+uv tool install .
+tcg-scanner --help
+```
+
+Data defaults to the checkout's `data/` directory when running from a checkout, and to
+`./data` when installed as a tool. Set `TCG_SCANNER_DATA` to use another directory.
 
 Layout:
 

@@ -21,7 +21,7 @@ Legend: ⬜ not started · ✅ done
 16. ⬜ **[I] OCR improvements** — Japanese cards, rotation/flip, name-based fallback when the code is unreadable, confidence gating.
 17. ⬜ **[I] Test coverage gaps** — real-photo fixture, parser fixtures for more set shapes, CLI end-to-end, an explicit renumbering regression.
 18. ⬜ **[Dsn] Recognition interface** — API, folder watcher or UI. Explicitly deferred at the start; this is where "how recognitions are grouped and exposed" resumes.
-19. ⬜ **[I] Packaging/ops** — `uv tool install` workflow, quickstart, rate-limit/attribution notes for the image source.
+19. ✅ **[I] Packaging/ops** — `uv tool install` workflow, quickstart, rate-limit/attribution notes for the image source.
 20. ⬜ **[I] Scale and performance** — index rebuild and `load_index` at full catalog size (~10k printings), DB growth, batching.
 
 Tags: **[D]** data · **[Dsn]** design decision · **[I]** implementation.

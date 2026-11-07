@@ -12,8 +12,17 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
+def _default_data_dir() -> Path:
+    # A checkout keeps its data beside the project; an installed tool has no
+    # checkout to anchor to, so it uses the working directory.
+    if (PROJECT_ROOT / "pyproject.toml").is_file():
+        return PROJECT_ROOT / "data"
+    return Path.cwd() / "data"
+
+
 def data_dir() -> Path:
-    return Path(os.environ.get("TCG_SCANNER_DATA", PROJECT_ROOT / "data")).expanduser()
+    override = os.environ.get("TCG_SCANNER_DATA")
+    return Path(override).expanduser() if override else _default_data_dir()
 
 
 def input_dir() -> Path:
