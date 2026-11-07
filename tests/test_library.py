@@ -6,11 +6,15 @@ from tcg_scanner.db.library import (
     add_match,
     add_owned,
     add_photo,
+    clear_review,
     collection_total,
+    get_review,
     list_matches,
     list_owned,
     reject_match,
     remove_owned,
+    review_stats,
+    set_review,
     update_owned,
 )
 
@@ -370,5 +374,80 @@ def test_list_matches_rejects_an_unknown_status(tmp_path):
     try:
         with pytest.raises(ValueError, match="unknown match status"):
             list_matches(conn, status="maybe")
+    finally:
+        conn.close()
+
+
+def test_reviews_upsert_expansion_and_clear(tmp_path):
+    conn = _library(tmp_path, _catalog(tmp_path))
+    try:
+        row = set_review(
+            conn,
+            run="run-a",
+            result_group="card-a",
+            status="right",
+            predicted_card_code="OP15-001",
+            predicted_print_index=0,
+            score=0.9,
+        )
+        assert row["status"] == "right"
+        assert row["expansion"] is None
+
+        updated = set_review(
+            conn,
+            run="run-a",
+            result_group="card-a",
+            status="wrong",
+            expansion="op15",
+            predicted_card_code="OP15-001",
+            predicted_print_index=0,
+            score=0.9,
+            note="wrong art",
+        )
+        assert updated["id"] == row["id"]
+        assert updated["status"] == "wrong"
+        assert updated["expansion"] == "OP15"
+        assert updated["note"] == "wrong art"
+
+        assert clear_review(conn, "run-a", "card-a") is True
+        assert get_review(conn, "run-a", "card-a") is None
+        assert clear_review(conn, "run-a", "card-a") is False
+    finally:
+        conn.close()
+
+
+def test_review_stats_group_by_predicted_expansion(tmp_path):
+    conn = _library(tmp_path, _catalog(tmp_path))
+    try:
+        set_review(conn, run="r", result_group="a", status="right", predicted_card_code="OP15-001")
+        set_review(
+            conn,
+            run="r",
+            result_group="b",
+            status="wrong",
+            expansion="OP15",
+            predicted_card_code="OP15-002",
+        )
+        set_review(conn, run="r", result_group="c", status="wrong", predicted_card_code="OP08-001")
+
+        stats = review_stats(conn, run="r")
+
+        assert stats["reviewed"] == 3
+        assert stats["right"] == 1
+        assert stats["wrong"] == 2
+        assert stats["accuracy"] == pytest.approx(1 / 3)
+        assert stats["by_expansion"] == {
+            "OP08": {"right": 0, "wrong": 1},
+            "OP15": {"right": 1, "wrong": 1},
+        }
+    finally:
+        conn.close()
+
+
+def test_reviews_reject_an_unknown_status(tmp_path):
+    conn = _library(tmp_path, _catalog(tmp_path))
+    try:
+        with pytest.raises(ValueError, match="unknown review status"):
+            set_review(conn, run="r", result_group="a", status="maybe")
     finally:
         conn.close()

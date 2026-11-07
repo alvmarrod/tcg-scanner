@@ -158,3 +158,25 @@ dd { margin: 0; }
   .list-head span:nth-child(6), .row > span:nth-child(6) { display: none; }
   .row-thumb { width: 64px; }
 }
+
+.stats { display: flex; gap: 16px; flex-wrap: wrap; padding: 10px 14px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; font-variant-numeric: tabular-nums; }
+.stats strong { color: var(--text); }
+
+.review-badge { position: absolute; right: 8px; top: 8px; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; color: #111; }
+.review-badge.ok, .review-mark.ok { background: var(--score); }
+.review-badge.bad, .review-mark.bad { background: var(--error); }
+.review-mark { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; color: #111; font-weight: 700; }
+.marks { display: inline-flex; gap: 6px; align-items: center; }
+
+.review-panel { display: flex; flex-direction: column; gap: 10px; }
+.review-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.review-head h2 { margin: 0; }
+.review-actions { display: flex; gap: 8px; align-items: center; }
+.pill { border: 1px solid var(--border); background: transparent; color: var(--text); padding: 6px 14px; border-radius: 999px; cursor: pointer; font: inherit; }
+.pill.ok.active { border-color: var(--score); background: color-mix(in srgb, var(--score) 22%, transparent); }
+.pill.bad.active { border-color: var(--error); background: color-mix(in srgb, var(--error) 22%, transparent); }
+.pill:disabled { opacity: .5; cursor: default; }
+.review-fields { display: flex; gap: 12px; align-items: end; flex-wrap: wrap; }
+.review-fields label { display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 12px; }
+.review-fields input { background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; color: var(--text); font: inherit; }
+.warn-text { color: var(--warn); margin: 0; }

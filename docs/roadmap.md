@@ -27,5 +27,7 @@ Legend: ⬜ not started · ✅ done
 21. ✅ **[I] Confirmed-sample feedback loop** — `samples add/list/remove`, user photos stored under their own origin and excluded from matching/eval by default.
 22. ✅ **[I] Read-only results website** — FastAPI API, Svelte album per run, side-by-side input/reference detail.
 23. ⬜ **[I] Web-triggered recognition** — upload or select photos from the browser and start a scan.
+24. ✅ **[I] Result feedback** — right/wrong flags, optional claimed expansion, accuracy stats in API/UI/CLI.
+25. ⬜ **[I] Constrained retry** — re-check a wrong result within its claimed expansion and confirm the correct printing.
 
 Tags: **[D]** data · **[Dsn]** design decision · **[I]** implementation.

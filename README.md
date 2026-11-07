@@ -81,6 +81,8 @@ uv run tcg-scanner identify path/to/photo.jpg          # JSON
 uv run tcg-scanner identify --text path/to/photo.jpg   # human table
 uv run tcg-scanner batch
 uv run tcg-scanner serve
+uv run tcg-scanner review list
+uv run tcg-scanner review stats
 uv run tcg-scanner samples list
 uv run tcg-scanner samples add photo.jpg OP15-001 0
 uv run tcg-scanner matches list
@@ -179,7 +181,19 @@ npm install
 npm run build
 ```
 
-Uploading or triggering a scan from the browser is not implemented yet.
+Each result can be reviewed as **right** or **wrong** (printing-level; unmarked stays
+neutral). Wrong results can claim a corrective expansion such as `OP15`, which is
+recorded but does not re-run recognition yet. Feedback lives in `library.db`, is written
+only by the web app, and is marked stale if the result is regenerated with a different
+prediction.
+
+`review stats` and the run header show reviewed/right/wrong counts, accuracy overall
+and per predicted expansion, plus the claimed expansions of wrong results.
+`review list` prints the raw reviews. The API exposes `PUT/DELETE
+/api/runs/{run}/results/{group}/review` and `GET /api/runs/{run}/stats`.
+
+Uploading or triggering a scan from the browser is not implemented yet, and neither is
+retrying a wrong result within its claimed expansion.
 
 ## Development
 

@@ -138,6 +138,13 @@ def build_parser() -> argparse.ArgumentParser:
     batch.add_argument("--top", type=int, default=5, metavar="N")
     batch.add_argument("--prefer", choices=["jp", "en"], default="jp")
 
+    review = commands.add_parser("review", help="inspect result feedback")
+    review_commands = review.add_subparsers(dest="review_command", required=True)
+    review_list = review_commands.add_parser("list", help="list recorded reviews")
+    review_list.add_argument("--run", default=None)
+    review_stats = review_commands.add_parser("stats", help="right/wrong statistics")
+    review_stats.add_argument("--run", default=None)
+
     serve = commands.add_parser("serve", help="serve the results website")
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=9876)
@@ -175,6 +182,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         ("samples", "remove"): _samples_remove,
         ("batch", None): _batch,
         ("serve", None): _serve,
+        ("review", "list"): _review_list,
+        ("review", "stats"): _review_stats,
         ("eval", None): _evaluate,
     }
     handler = handlers.get((args.command, getattr(args, f"{args.command}_command", None)))
@@ -773,6 +782,61 @@ def _owned_list(args: argparse.Namespace) -> int:
     currency = next((row["currency"] for row in rows if row["currency"]), "")
     suffix = f" ({unpriced} rows without price)" if unpriced else ""
     print(f"total: {total:.2f} {currency}{suffix}".rstrip())
+    return 0
+
+
+def _review_connection():
+    from tcg_scanner.db import open_library
+
+    init_library(config.library_db())
+    return open_library(config.library_db())
+
+
+def _review_list(args: argparse.Namespace) -> int:
+    from tcg_scanner.db.library import list_reviews
+
+    conn = _review_connection()
+    try:
+        rows = list_reviews(conn, run=args.run)
+    finally:
+        conn.close()
+
+    if not rows:
+        print("no reviews")
+        return 0
+    for row in rows:
+        expansion = f" → {row['expansion']}" if row["expansion"] else ""
+        note = f"  {row['note']}" if row["note"] else ""
+        print(
+            f"{row['run']}/{row['result_group']}  {row['status']}{expansion}  "
+            f"{row['updated_at']}{note}"
+        )
+    return 0
+
+
+def _review_stats(args: argparse.Namespace) -> int:
+    from tcg_scanner.db.library import review_stats
+
+    conn = _review_connection()
+    try:
+        stats = review_stats(conn, run=args.run)
+    finally:
+        conn.close()
+
+    reviewed = stats["reviewed"]
+    accuracy = "n/a" if stats["accuracy"] is None else f"{stats['accuracy']:.1%}"
+    print(
+        f"reviewed {reviewed}: right {stats['right']}, wrong {stats['wrong']}, accuracy {accuracy}"
+    )
+    if stats["by_expansion"]:
+        print("by predicted expansion:")
+        for expansion, counts in stats["by_expansion"].items():
+            total = counts["right"] + counts["wrong"]
+            print(f"  {expansion}: {counts['right']}/{total}")
+    if stats["claimed_expansion"]:
+        print("claimed expansions (wrong):")
+        for expansion, count in stats["claimed_expansion"].items():
+            print(f"  {expansion}: {count}")
     return 0
 
 

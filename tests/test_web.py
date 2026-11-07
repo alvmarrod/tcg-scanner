@@ -194,3 +194,64 @@ def test_rotates_the_input_image_on_request(tmp_path):
         assert image.size == (560, 400)
 
     assert client.get("/api/runs/run-a/results/card-a/input?rotate=45").status_code == 400
+
+
+def test_review_round_trip_and_stats(tmp_path):
+    client = _client(tmp_path)
+
+    created = client.put("/api/runs/run-a/results/card-a/review", json={"status": "right"}).json()
+    assert created["status"] == "right"
+    assert created["stale"] is False
+
+    summary = client.get("/api/runs/run-a").json()["results"][0]
+    assert summary["review"]["status"] == "right"
+
+    stats = client.get("/api/runs/run-a/stats").json()
+    assert stats["reviewed"] == 1
+    assert stats["right"] == 1
+    assert stats["unmarked"] == 0
+    assert stats["accuracy"] == 1.0
+
+    updated = client.put(
+        "/api/runs/run-a/results/card-a/review",
+        json={"status": "wrong", "expansion": "op15", "note": "wrong art"},
+    ).json()
+    assert updated["status"] == "wrong"
+    assert updated["expansion"] == "OP15"
+
+    stats = client.get("/api/runs/run-a/stats").json()
+    assert stats["wrong"] == 1
+    assert stats["accuracy"] == 0.0
+    assert stats["claimed_expansion"] == {"OP15": 1}
+    assert stats["by_expansion"] == {"OP15": {"right": 0, "wrong": 1}}
+
+    assert client.delete("/api/runs/run-a/results/card-a/review").json()["removed"] is True
+    assert client.get("/api/runs/run-a").json()["results"][0]["review"] is None
+
+
+def test_review_is_marked_stale_after_the_result_changes(tmp_path):
+    client = _client(tmp_path)
+    client.put("/api/runs/run-a/results/card-a/review", json={"status": "right"})
+
+    path = tmp_path / "data" / "output" / "run-a" / "card-a.json"
+    report = json.loads(path.read_text(encoding="utf-8"))
+    report["detections"][0]["card_code"] = "OP15-099"
+    path.write_text(json.dumps(report), encoding="utf-8")
+
+    review = client.get("/api/runs/run-a").json()["results"][0]["review"]
+
+    assert review["stale"] is True
+
+
+def test_review_rejects_an_invalid_status(tmp_path):
+    client = _client(tmp_path)
+
+    response = client.put("/api/runs/run-a/results/card-a/review", json={"status": "maybe"})
+
+    assert response.status_code == 422
+
+
+def test_lists_catalog_expansions(tmp_path):
+    client = _client(tmp_path)
+
+    assert client.get("/api/expansions").json()["expansions"] == ["OP15"]

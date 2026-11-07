@@ -8,7 +8,7 @@ _SCHEMA_DIR = Path(__file__).parent
 # The schema files are version 1 and stay frozen. Later changes are added as
 # migrations keyed by the version they produce; fresh databases run the baseline
 # and then every migration in order.
-SCHEMA_VERSIONS = {"catalog": 3, "library": 1}
+SCHEMA_VERSIONS = {"catalog": 3, "library": 2}
 MIGRATIONS: dict[str, dict[int, str]] = {
     "catalog": {
         2: """
@@ -63,7 +63,26 @@ MIGRATIONS: dict[str, dict[int, str]] = {
               );
         """,
     },
-    "library": {},
+    "library": {
+        2: """
+            CREATE TABLE IF NOT EXISTS reviews (
+                id                    INTEGER PRIMARY KEY,
+                run                   TEXT NOT NULL,
+                result_group          TEXT NOT NULL,
+                status                TEXT NOT NULL CHECK (status IN ('right', 'wrong')),
+                expansion             TEXT,
+                predicted_card_code   TEXT,
+                predicted_print_index INTEGER,
+                score                 REAL,
+                note                  TEXT,
+                created_at            TEXT NOT NULL,
+                updated_at            TEXT NOT NULL,
+                UNIQUE (run, result_group)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_reviews_run ON reviews (run);
+        """,
+    },
 }
 
 

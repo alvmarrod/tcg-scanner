@@ -4,20 +4,36 @@ import hashlib
 import json
 import sqlite3
 from pathlib import Path
+from typing import Literal
 from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 from tcg_scanner import config
+from tcg_scanner.db import init_library, open_library
+from tcg_scanner.db.library import (
+    clear_review,
+    list_reviews,
+    set_review,
+)
 
 THUMBNAIL_SIZE = (520, 520)
 UI_DIR = Path(__file__).parent / "ui_build"
 
 
+class ReviewInput(BaseModel):
+    status: Literal["right", "wrong"]
+    expansion: str | None = None
+    note: str | None = None
+
+
 def create_app(data_dir: Path | None = None) -> FastAPI:
     root = (data_dir or config.data_dir()).resolve()
+    library_path = root / "db" / "library.db"
+    init_library(library_path)
     app = FastAPI(
         title="tcg-scanner results", docs_url="/api/docs", openapi_url="/api/openapi.json"
     )
@@ -128,6 +144,28 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
                 temporary.replace(target)
         return target
 
+    def reviews_for(run: str) -> dict[str, sqlite3.Row]:
+        connection = open_library(library_path)
+        try:
+            return {row["result_group"]: row for row in list_reviews(connection, run=run)}
+        finally:
+            connection.close()
+
+    def review_payload(result: dict, row: sqlite3.Row | None) -> dict:
+        if row is None:
+            return None
+        stale = (
+            result.get("card_code") != row["predicted_card_code"]
+            or result.get("print_index") != row["predicted_print_index"]
+        )
+        return {
+            "status": row["status"],
+            "expansion": row["expansion"],
+            "note": row["note"],
+            "updated_at": row["updated_at"],
+            "stale": stale,
+        }
+
     def summary(run: str, group: str, report: dict) -> dict:
         detection = (report.get("detections") or [None])[0]
         base = f"/api/runs/{quote(run, safe='')}/results/{quote(group, safe='')}"
@@ -158,6 +196,7 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
             "input_rotation": rotation,
             "reference_url": None,
             "reference_thumb": None,
+            "review": None,
             "price": None,
             "price_eur": None,
             "price_usd": None,
@@ -201,6 +240,7 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
             except OSError, json.JSONDecodeError:
                 metadata = {}
 
+        reviews = reviews_for(name)
         results = []
         for path in sorted(directory.glob("*.json")):
             if path.name == "run.json":
@@ -211,7 +251,9 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
                 continue
             if report.get("schema_version", 0) < 2:
                 continue
-            results.append(summary(name, path.stem, report))
+            result = summary(name, path.stem, report)
+            result["review"] = review_payload(result, reviews.get(path.stem))
+            results.append(result)
 
         return {
             "name": name,
@@ -273,6 +315,83 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="no input image")
         source = data_file(image_path)
         return _file_response(rendered(source, rotate=rotate, thumb=thumb))
+
+    @app.put("/api/runs/{run}/results/{group}/review")
+    def put_review(run: str, group: str, payload: ReviewInput) -> dict:
+        report = load_report(run, group)
+        summary_data = summary(run, group, report)
+        detection = (report.get("detections") or [None])[0]
+        connection = open_library(library_path)
+        try:
+            row = set_review(
+                connection,
+                run=run,
+                result_group=group,
+                status=payload.status,
+                expansion=payload.expansion,
+                predicted_card_code=(detection["card_code"] if detection is not None else None),
+                predicted_print_index=(detection["print_index"] if detection is not None else None),
+                score=detection.get("confidence") if detection is not None else None,
+                note=payload.note,
+            )
+        finally:
+            connection.close()
+        return review_payload(summary_data, row)
+
+    @app.delete("/api/runs/{run}/results/{group}/review")
+    def delete_review(run: str, group: str) -> dict:
+        load_report(run, group)
+        connection = open_library(library_path)
+        try:
+            removed = clear_review(connection, run, group)
+        finally:
+            connection.close()
+        return {"removed": removed}
+
+    @app.get("/api/runs/{run}/stats")
+    def run_stats(run: str) -> dict:
+        results = load_run(run)["results"]
+        reviewed = [result for result in results if result["review"]]
+        right = sum(1 for result in reviewed if result["review"]["status"] == "right")
+        wrong = len(reviewed) - right
+
+        by_expansion: dict[str, dict[str, int]] = {}
+        claimed: dict[str, int] = {}
+        for result in results:
+            review = result["review"]
+            if review is None:
+                continue
+            expansion = (result["card_code"] or "unknown").split("-")[0]
+            bucket = by_expansion.setdefault(expansion, {"right": 0, "wrong": 0})
+            bucket[review["status"]] += 1
+            if review["status"] == "wrong" and review["expansion"]:
+                claimed[review["expansion"]] = claimed.get(review["expansion"], 0) + 1
+
+        return {
+            "total": len(results),
+            "reviewed": len(reviewed),
+            "unmarked": len(results) - len(reviewed),
+            "right": right,
+            "wrong": wrong,
+            "accuracy": right / len(reviewed) if reviewed else None,
+            "by_expansion": dict(sorted(by_expansion.items())),
+            "claimed_expansion": dict(sorted(claimed.items())),
+        }
+
+    @app.get("/api/expansions")
+    def expansions() -> dict:
+        database = root / "db" / "catalog.db"
+        if not database.is_file():
+            return {"expansions": []}
+        connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
+        try:
+            rows = connection.execute(
+                "SELECT DISTINCT substr(code, 1, instr(code, '-') - 1) AS expansion "
+                "FROM cards WHERE instr(code, '-') > 0 ORDER BY expansion"
+            ).fetchall()
+        finally:
+            connection.close()
+        return {"expansions": [row[0] for row in rows if row[0]]}
 
     @app.get("/api/runs/{run}/results/{group}/reference")
     def reference_image(run: str, group: str, thumb: bool = Query(default=False)) -> FileResponse:

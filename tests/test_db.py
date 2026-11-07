@@ -214,3 +214,15 @@ def test_v2_migration_moves_duplicate_english_art_to_a_miss(tmp_path):
         assert [row[0] for row in misses] == ["jp"]
     finally:
         conn.close()
+
+
+def test_library_schema_has_reviews_and_version_two(tmp_path):
+    path = tmp_path / "library.db"
+    init_library(path)
+    conn = open_library(path)
+    try:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+        names = {row[0] for row in conn.execute("SELECT name FROM sqlite_master")}
+        assert "reviews" in names
+    finally:
+        conn.close()

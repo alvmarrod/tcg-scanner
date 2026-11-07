@@ -5,6 +5,7 @@
 
   let { name } = $props()
   let run = $state(null)
+  let stats = $state(null)
   let error = $state(null)
   let view = $state(localStorage.getItem('view') || 'grid')
   const initialSort = loadSort()
@@ -13,7 +14,12 @@
 
   onMount(async () => {
     try {
-      run = await getJSON(`/api/runs/${enc(name)}`)
+      const [runInfo, statsInfo] = await Promise.all([
+        getJSON(`/api/runs/${enc(name)}`),
+        getJSON(`/api/runs/${enc(name)}/stats`),
+      ])
+      run = runInfo
+      stats = statsInfo
     } catch (problem) {
       error = problem.message
     }
@@ -62,6 +68,17 @@
       <span class="muted">{run.groups} cards · {run.photos} photos</span>
     </div>
 
+    {#if stats}
+      <div class="stats">
+        <span><strong>{stats.right}</strong> right</span>
+        <span><strong>{stats.wrong}</strong> wrong</span>
+        <span>{stats.unmarked} unmarked</span>
+        <span class="muted">
+          accuracy {stats.accuracy === null ? '—' : `${(stats.accuracy * 100).toFixed(1)}%`}
+        </span>
+      </div>
+    {/if}
+
     <div class="toolbar">
       <div class="view-toggle" role="group" aria-label="view">
         <button class:active={view === 'grid'} onclick={() => setView('grid')}>▦ grid</button>
@@ -95,6 +112,11 @@
               {#if result.warnings.length > 0}
                 <span class="warn" title={result.warnings.join(', ')}>!</span>
               {/if}
+              {#if result.review}
+                <span class:ok={result.review.status === 'right'} class:bad={result.review.status === 'wrong'} class="review-badge">
+                  {result.review.status === 'right' ? '✓' : '✗'}
+                </span>
+              {/if}
             </div>
             <div class="tile-meta">
               <strong>{title(result)}</strong>
@@ -120,7 +142,16 @@
             <span class="score">{score(result.score)}</span>
             <span>{money(result.price_eur, 'EUR')}</span>
             <span>{money(result.price_usd, 'USD')}</span>
-            <span>{#if result.warnings.length > 0}<span class="warn-inline" title={result.warnings.join(', ')}>!</span>{/if}</span>
+            <span class="marks">
+              {#if result.review}
+                <span class:ok={result.review.status === 'right'} class:bad={result.review.status === 'wrong'} class="review-mark">
+                  {result.review.status === 'right' ? '✓' : '✗'}
+                </span>
+              {/if}
+              {#if result.warnings.length > 0}
+                <span class="warn-inline" title={result.warnings.join(', ')}>!</span>
+              {/if}
+            </span>
           </a>
         {/each}
       </div>
