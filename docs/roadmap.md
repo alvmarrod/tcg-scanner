@@ -16,7 +16,7 @@ Legend: ⬜ not started · ✅ done
 11. ⬜ **[I] `db check`** — report owned/matches whose snapshot no longer resolves after a re-sync, orphan images, index drift. Makes the snapshot guard visible instead of silent.
 12. ✅ **[I] Schema versioning/migrations** — `PRAGMA user_version` plus real migrations. `CREATE IF NOT EXISTS` cannot evolve `library.db`, which now holds user data.
 13. ⬜ **[I] Augmented reference vectors** — perspective/brightness variants per printing. Only if eval shows single references are fragile under angle/light.
-14. ⬜ **[I] Patch-token verification / ORB tie-break** — for prints that differ only by foil or border, which global DINOv2 conflates. Storage cost already measured (~1 MB/image as patch tokens).
+14. ✅ **[I] Patch-token verification / ORB tie-break** — for prints that differ only by foil or border, which global DINOv2 conflates. Storage cost already measured (~1 MB/image as patch tokens).
 15. ⬜ **[I] Detection robustness** — multiple cards in one photo, partial/occluded cards, and a sensible fallback when corner detection fails (currently the original image is kept).
 16. ⬜ **[I] OCR improvements** — Japanese cards, rotation/flip, name-based fallback when the code is unreadable, confidence gating.
 17. ⬜ **[I] Test coverage gaps** — real-photo fixture, parser fixtures for more set shapes, CLI end-to-end, an explicit renumbering regression.

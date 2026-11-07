@@ -5,6 +5,8 @@ from pathlib import Path
 import numpy as np
 
 MODEL_NAME = "vit_small_patch14_dinov2.lvd142m"
+PATCH_GRID = 8
+"""Patch tokens are average-pooled to an 8x8 grid before storage."""
 
 
 class Embedder:
@@ -27,20 +29,36 @@ class Embedder:
         config = timm.data.resolve_data_config(self.model.pretrained_cfg)
         self.transform = timm.data.create_transform(**config, is_training=False)
 
-    def __call__(self, paths: list[Path]) -> np.ndarray:
+    def __call__(self, paths: list[Path]) -> tuple[np.ndarray, np.ndarray]:
         from PIL import Image
 
         return self._embed([self.transform(Image.open(path).convert("RGB")) for path in paths])
 
-    def embed_bgr(self, image: np.ndarray) -> np.ndarray:
+    def embed_bgr(self, image: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         from PIL import Image
 
         rgb = image[:, :, ::-1]
         return self._embed([self.transform(Image.fromarray(rgb))])
 
-    def _embed(self, tensors: list) -> np.ndarray:
+    def _embed(self, tensors: list) -> tuple[np.ndarray, np.ndarray]:
         batch = self._torch.stack(tensors).to(self.device)
         with self._torch.no_grad():
-            features = self.model.forward_features(batch)[:, 0]
-        vectors = self._torch.nn.functional.normalize(features, dim=1)
-        return vectors.cpu().numpy().astype(np.float32)
+            features = self.model.forward_features(batch)
+            global_vectors = self._torch.nn.functional.normalize(features[:, 0], dim=1)
+            patches = _pool_patches(features[:, 1:])
+        return (
+            global_vectors.cpu().numpy().astype(np.float32),
+            patches.cpu().numpy().astype(np.float32),
+        )
+
+
+def _pool_patches(tokens):
+    """(B, N, D) patch tokens -> (B, GRID*GRID, D), L2-normalized per cell."""
+    import torch
+
+    batch, count, dim = tokens.shape
+    side = int(round(count**0.5))
+    grid = tokens.reshape(batch, side, side, dim).permute(0, 3, 1, 2)
+    pooled = torch.nn.functional.adaptive_avg_pool2d(grid, (PATCH_GRID, PATCH_GRID))
+    pooled = pooled.permute(0, 2, 3, 1).reshape(batch, PATCH_GRID * PATCH_GRID, dim)
+    return torch.nn.functional.normalize(pooled, dim=-1)

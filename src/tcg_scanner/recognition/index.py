@@ -7,11 +7,12 @@ from pathlib import Path
 
 import numpy as np
 
-EmbedFn = Callable[[list[Path]], np.ndarray]
+EmbedFn = Callable[[list[Path]], tuple[np.ndarray, np.ndarray]]
 Progress = Callable[[int, int], None]
 
-# Global descriptors only for now; patch tokens are deferred until matching needs them.
+# Global descriptors rank candidates; pooled patch tokens verify close calls.
 KIND_GLOBAL = "global"
+KIND_PATCH = "patch"
 
 
 @dataclass(frozen=True)
@@ -87,14 +88,19 @@ def build_index(
     query = """
         SELECT image.id, image.path
         FROM card_images AS image
-        LEFT JOIN embeddings AS embedding
-            ON embedding.card_image_id = image.id
-            AND embedding.model = ?
-            AND embedding.kind = ?
-        WHERE image.origin = 'reference' AND embedding.card_image_id IS NULL
+        LEFT JOIN embeddings AS global_embedding
+            ON global_embedding.card_image_id = image.id
+            AND global_embedding.model = ?
+            AND global_embedding.kind = ?
+        LEFT JOIN embeddings AS patch_embedding
+            ON patch_embedding.card_image_id = image.id
+            AND patch_embedding.model = ?
+            AND patch_embedding.kind = ?
+        WHERE image.origin = 'reference'
+            AND (global_embedding.card_image_id IS NULL OR patch_embedding.card_image_id IS NULL)
         ORDER BY image.id
     """
-    params: list[object] = [model_name, KIND_GLOBAL]
+    params: list[object] = [model_name, KIND_GLOBAL, model_name, KIND_PATCH]
     if limit is not None:
         query += " LIMIT ?"
         params.append(limit)
@@ -131,6 +137,11 @@ def from_blob(blob: bytes, dim: int) -> np.ndarray:
     return np.frombuffer(blob, dtype=np.float16).reshape(dim)
 
 
+def from_patch_blob(blob: bytes, dim: int) -> np.ndarray:
+    """Patch tokens keep `dim` columns and one row per grid cell."""
+    return np.frombuffer(blob, dtype=np.float16).reshape(-1, dim)
+
+
 def _embed_batch(
     conn: sqlite3.Connection,
     embed: EmbedFn,
@@ -140,14 +151,21 @@ def _embed_batch(
     if not batch:
         return 0
 
-    vectors = embed([path for _, path in batch])
-    for (image_id, _), vector in zip(batch, vectors, strict=True):
+    vectors, patches = embed([path for _, path in batch])
+    for (image_id, _), vector, patch in zip(batch, vectors, patches, strict=True):
         conn.execute(
             """
             INSERT OR REPLACE INTO embeddings (card_image_id, model, dim, kind, vector)
             VALUES (?, ?, ?, ?, ?)
             """,
             (image_id, model_name, len(vector), KIND_GLOBAL, to_blob(vector)),
+        )
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO embeddings (card_image_id, model, dim, kind, vector)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (image_id, model_name, patch.shape[1], KIND_PATCH, to_blob(patch)),
         )
     conn.commit()
     return len(batch)

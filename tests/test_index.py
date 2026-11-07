@@ -30,7 +30,9 @@ def _seed(tmp_path):
 
 
 def _fake_embed(paths):
-    return np.tile(np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32), (len(paths), 1))
+    vectors = np.tile(np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32), (len(paths), 1))
+    patches = np.ones((len(paths), 64, DIM), dtype=np.float32)
+    return vectors, patches
 
 
 def test_build_index_embeds_reference_images(tmp_path):
@@ -41,11 +43,12 @@ def test_build_index_embeds_reference_images(tmp_path):
         assert result.embedded == 2
         assert result.missing == 0
         rows = conn.execute("SELECT * FROM embeddings ORDER BY card_image_id").fetchall()
-        assert len(rows) == 2
+        assert len(rows) == 4
         assert {row["model"] for row in rows} == {"fake-model"}
-        assert {row["kind"] for row in rows} == {"global"}
+        assert {row["kind"] for row in rows} == {"global", "patch"}
         assert {row["dim"] for row in rows} == {DIM}
-        decoded = from_blob(rows[0]["vector"], DIM)
+        global_row = next(row for row in rows if row["kind"] == "global")
+        decoded = from_blob(global_row["vector"], DIM)
         assert decoded.dtype == np.float16
         assert np.allclose(decoded, [1.0, 0.0, 0.0, 0.0])
     finally:
@@ -58,7 +61,23 @@ def test_build_index_is_incremental(tmp_path):
         build_index(conn, tmp_path, _fake_embed, "fake-model")
         again = build_index(conn, tmp_path, _fake_embed, "fake-model")
         assert again.embedded == 0
-        assert conn.execute("SELECT COUNT(*) FROM embeddings").fetchone()[0] == 2
+        assert conn.execute("SELECT COUNT(*) FROM embeddings").fetchone()[0] == 4
+    finally:
+        conn.close()
+
+
+def test_build_index_repairs_missing_patch_embeddings(tmp_path):
+    conn = _seed(tmp_path)
+    try:
+        build_index(conn, tmp_path, _fake_embed, "fake-model")
+        conn.execute("DELETE FROM embeddings WHERE kind = 'patch'")
+
+        result = build_index(conn, tmp_path, _fake_embed, "fake-model")
+
+        assert result.embedded == 2
+        assert (
+            conn.execute("SELECT COUNT(*) FROM embeddings WHERE kind = 'patch'").fetchone()[0] == 2
+        )
     finally:
         conn.close()
 

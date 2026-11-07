@@ -221,19 +221,21 @@ def _identify(args: argparse.Namespace) -> int:
     from tcg_scanner.imaging.rectify import rectify_file
     from tcg_scanner.recognition.embed import Embedder
     from tcg_scanner.recognition.index import load_index
-    from tcg_scanner.recognition.match import identify
+    from tcg_scanner.recognition.match import identify, verify
     from tcg_scanner.recognition.ocr import CodeReader
 
     init_catalog(config.catalog_db())
     rectified = rectify_file(args.image)
     code = CodeReader().read(rectified.image)
     embedder = Embedder()
-    query = embedder.embed_bgr(rectified.image)[0]
+    query, patches = embedder.embed_bgr(rectified.image)
+    query = query[0]
 
     conn = open_catalog(config.catalog_db())
     try:
         index = load_index(conn, embedder.model_name)
         candidates = identify(conn, index, query, code=code, top_k=args.top)
+        candidates = verify(conn, candidates, patches[0], embedder.model_name)
     finally:
         conn.close()
 
@@ -257,8 +259,9 @@ def _identify(args: argparse.Namespace) -> int:
     print(f"card edge: {'found' if rectified.found else 'not found'}")
     print(f"code: {code or 'unreadable'}")
     for position, candidate in enumerate(candidates, start=1):
+        patch = f"  patch {candidate.patch_score:.3f}" if candidate.patch_score is not None else ""
         print(
-            f"{position:>2}. {candidate.score:.3f}  {candidate.card_code}  "
+            f"{position:>2}. {candidate.score:.3f}{patch}  {candidate.card_code}  "
             f"{candidate.card_name}  ({candidate.set_code}, {candidate.variant_label})"
         )
     if not candidates:
@@ -384,7 +387,7 @@ def _evaluate(args: argparse.Namespace) -> int:
     from tcg_scanner.imaging.rectify import rectify_file
     from tcg_scanner.recognition.embed import Embedder
     from tcg_scanner.recognition.index import load_index
-    from tcg_scanner.recognition.match import identify
+    from tcg_scanner.recognition.match import identify, verify
     from tcg_scanner.recognition.ocr import CodeReader
 
     labels_path = args.labels or (config.data_dir() / "eval" / "labels.csv")
@@ -404,8 +407,9 @@ def _evaluate(args: argparse.Namespace) -> int:
         def predict(image):
             rectified = rectify_file(image)
             code = reader.read(rectified.image)
-            query = embedder.embed_bgr(rectified.image)[0]
-            return code, identify(conn, index, query, code=code, top_k=args.top)
+            query, patches = embedder.embed_bgr(rectified.image)
+            candidates = identify(conn, index, query[0], code=code, top_k=args.top)
+            return code, verify(conn, candidates, patches[0], embedder.model_name)
 
         report = evaluate(labels, predict, top_k=args.top)
     finally:

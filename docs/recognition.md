@@ -36,23 +36,24 @@ hoping the model is invariant.
    descriptor plus patch tokens.
 6. **Rank** — cosine kNN over stored reference vectors; scores are aggregated per
    printing across its augmented references.
-7. **Verify** — not implemented yet: matching ranks on global descriptors alone.
-   Patch-token comparison on a narrow margin and the optional ORB tie-breaker
-   arrive once evaluation shows they are needed.
+7. **Verify** — when candidates fall within a small score margin of the top-1,
+   compare pooled patch tokens cell by cell and order that group by patch
+   similarity. A group with a missing patch vector is left untouched. ORB +
+   homography inliers remain an optional tie-breaker if evaluation shows it helps.
 8. **Report** — the printing key `(card_code, print_index)`, confidence, and method.
    The match becomes `owned` only after the user confirms it.
 
 ## Reference data
 
-Per printing, store several vectors rather than one: the rectified reference plus a
-small set of augmented variants (mild perspective, brightness shifts), covering
-lighting conditions the single product image does not show. Store the model name and
-dimension with every vector, so changing models is delete-and-recompute rather than a
-migration.
+Vectors belong to `card_images` rows, so one printing can hold several references:
+the rectified product image, and later, if evaluation asks for them, augmented
+variants (mild perspective, brightness shifts) for lighting conditions the product
+image does not show. Every vector carries its model name and dimension, so changing
+models is delete-and-recompute rather than a migration.
 
-Only global descriptors are stored so far. Patch tokens are deferred to the matching
-phase: one 37×37 grid is about 1 MB per image as float16, roughly 10 GB over a full
-catalog. They will need pooling or quantization before they are worth keeping.
+Patch tokens are average-pooled to an 8×8 grid, L2-normalized per cell and stored
+alongside the global descriptor: about 49 KB per image as float16, roughly 500 MB
+over a full catalog. They are only read for the top candidates.
 
 ## Why DINOv2
 
@@ -89,6 +90,7 @@ decided by these numbers, not by intuition.
 ## Open decisions
 
 - Model size and export path (PyTorch vs. ONNX Runtime).
-- Patch-token similarity threshold and how it affects reported confidence.
+- Patch margin (currently a hardcoded 0.05) and whether patch agreement should feed
+  the reported confidence.
 - OCR engine, and whether a failed OCR should ever block a match.
 - Whether the augmented reference set is generated at import time or on demand.
