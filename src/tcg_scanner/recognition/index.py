@@ -105,8 +105,7 @@ def build_index(
             ON patch_embedding.card_image_id = image.id
             AND patch_embedding.model = ?
             AND patch_embedding.kind = ?
-        WHERE image.origin = 'reference'
-            AND (global_embedding.card_image_id IS NULL OR patch_embedding.card_image_id IS NULL)
+        WHERE global_embedding.card_image_id IS NULL OR patch_embedding.card_image_id IS NULL
         ORDER BY image.id
     """
     params: list[object] = [model_name, KIND_GLOBAL, model_name, KIND_PATCH]

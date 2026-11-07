@@ -1,7 +1,7 @@
 import numpy as np
 
 from tcg_scanner.db import init_catalog, open_catalog
-from tcg_scanner.recognition.index import build_index, from_blob, to_blob
+from tcg_scanner.recognition.index import build_index, from_blob, load_index, to_blob
 
 DIM = 4
 
@@ -103,3 +103,32 @@ def test_build_index_skips_missing_files(tmp_path):
 def test_blob_round_trip():
     vector = np.array([0.1, -0.2, 0.3, 0.4], dtype=np.float32)
     assert np.allclose(from_blob(to_blob(vector), 4), vector, atol=1e-3)
+
+
+def test_load_index_filters_origins(tmp_path):
+    conn = _seed(tmp_path)
+    try:
+        build_index(conn, tmp_path, _fake_embed, "fake-model")
+        conn.execute(
+            "UPDATE card_images SET origin = 'user' WHERE id = (SELECT MIN(id) FROM card_images)"
+        )
+        conn.commit()
+
+        assert len(load_index(conn, "fake-model")) == 1
+        assert len(load_index(conn, "fake-model", origins=("reference", "user"))) == 2
+    finally:
+        conn.close()
+
+
+def test_build_index_embeds_user_samples(tmp_path):
+    conn = _seed(tmp_path)
+    try:
+        conn.execute("UPDATE card_images SET origin = 'user'")
+        conn.commit()
+
+        result = build_index(conn, tmp_path, _fake_embed, "fake-model")
+
+        assert result.embedded == 2
+        assert conn.execute("SELECT COUNT(DISTINCT origin) FROM card_images").fetchone()[0] == 1
+    finally:
+        conn.close()

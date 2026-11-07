@@ -17,6 +17,7 @@ class CheckResult:
     unindexed_images: int
     image_misses: int
     jp_missing: int
+    user_samples: int
 
     @property
     def ok(self) -> bool:
@@ -94,8 +95,7 @@ def check(conn: sqlite3.Connection, data_root: Path, model_name: str) -> CheckRe
             ON patch_embedding.card_image_id = image.id
             AND patch_embedding.model = ?
             AND patch_embedding.kind = 'patch'
-        WHERE image.origin = 'reference'
-            AND (global_embedding.card_image_id IS NULL OR patch_embedding.card_image_id IS NULL)
+        WHERE global_embedding.card_image_id IS NULL OR patch_embedding.card_image_id IS NULL
         """,
         (model_name, model_name),
     ).fetchone()[0]
@@ -126,4 +126,7 @@ def check(conn: sqlite3.Connection, data_root: Path, model_name: str) -> CheckRe
         unindexed_images=unindexed,
         image_misses=image_misses,
         jp_missing=jp_missing,
+        user_samples=conn.execute(
+            "SELECT COUNT(*) FROM card_images WHERE origin = 'user'"
+        ).fetchone()[0],
     )

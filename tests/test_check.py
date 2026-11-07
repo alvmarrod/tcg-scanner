@@ -79,6 +79,7 @@ def test_clean_database_reports_nothing(tmp_path):
         assert result.matches_total == 1
         assert result.images_total == 1
         assert result.unindexed_images == 0
+        assert result.user_samples == 0
     finally:
         conn.close()
 

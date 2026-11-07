@@ -80,6 +80,8 @@ uv run tcg-scanner inspect path/to/photo.jpg
 uv run tcg-scanner identify path/to/photo.jpg          # JSON
 uv run tcg-scanner identify --text path/to/photo.jpg   # human table
 uv run tcg-scanner batch
+uv run tcg-scanner samples list
+uv run tcg-scanner samples add photo.jpg OP15-001 0
 uv run tcg-scanner matches list
 uv run tcg-scanner matches accept 12
 uv run tcg-scanner owned list
@@ -130,6 +132,12 @@ single-photo cards. Each group is fused (best score per printing, OCR majority,
 outlier photos excluded with a warning) and written as one JSON report to
 `data/output/<group>.json`. Nothing is written to `library.db`. A broken file does not
 stop the run; the command exits 1 if any file failed.
+
+Confirmed photos can be kept as recognition samples: `samples add <image> <card_code>
+<print_index>` stores the rectified image under `data/samples/<code>/<index>/`, tagged
+`origin=user`; `samples list` and `samples remove` manage them. `index build` embeds
+them, but matching and eval only use catalog references by default, so a wrong
+confirmation cannot distort recognition.
 
 `matches` and `owned` are the collection module. They operate on rows you create
 manually (`owned add`) or record later through a future ingestion step; recognition no

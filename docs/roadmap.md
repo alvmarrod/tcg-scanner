@@ -24,6 +24,6 @@ Legend: ⬜ not started · ✅ done
 19. ✅ **[I] Packaging/ops** — `uv tool install` workflow, quickstart, rate-limit/attribution notes for the image source.
 20. ✅ **[I] Scale and performance** — index rebuild and `load_index` at full catalog size (~10k printings), DB growth, batching.
 
-21. ⬜ **[I] Confirmed-sample feedback loop** — `samples add/list/remove`, user photos stored under their own origin and excluded from matching/eval by default.
+21. ✅ **[I] Confirmed-sample feedback loop** — `samples add/list/remove`, user photos stored under their own origin and excluded from matching/eval by default.
 
 Tags: **[D]** data · **[Dsn]** design decision · **[I]** implementation.

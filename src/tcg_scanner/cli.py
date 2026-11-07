@@ -121,6 +121,18 @@ def build_parser() -> argparse.ArgumentParser:
     owned_list = owned_commands.add_parser("list", help="list the collection with latest prices")
     owned_list.add_argument("--source", default="auto", choices=["auto", "eur", "usd"])
 
+    samples = commands.add_parser("samples", help="manage confirmed user photo samples")
+    sample_commands = samples.add_subparsers(dest="samples_command", required=True)
+    sample_add = sample_commands.add_parser("add", help="store a confirmed photo as a sample")
+    sample_add.add_argument("image", type=Path, metavar="IMAGE")
+    sample_add.add_argument("card_code", metavar="CARD_CODE")
+    sample_add.add_argument("print_index", type=int, metavar="PRINT_INDEX")
+    sample_add.add_argument("--language", choices=["jp", "en"], default="jp")
+    sample_list = sample_commands.add_parser("list", help="list confirmed samples")
+    sample_list.add_argument("--card-code", default=None)
+    sample_remove = sample_commands.add_parser("remove", help="delete a sample")
+    sample_remove.add_argument("sample_id", type=int)
+
     batch = commands.add_parser("batch", help="identify every photo in a folder")
     batch.add_argument("--input", type=Path, default=None, metavar="DIR")
     batch.add_argument("--top", type=int, default=5, metavar="N")
@@ -154,6 +166,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         ("owned", "update"): _owned_update,
         ("owned", "remove"): _owned_remove,
         ("owned", "list"): _owned_list,
+        ("samples", "add"): _samples_add,
+        ("samples", "list"): _samples_list,
+        ("samples", "remove"): _samples_remove,
         ("batch", None): _batch,
         ("eval", None): _evaluate,
     }
@@ -190,6 +205,7 @@ def _db_check(args: argparse.Namespace) -> int:
         f"{len(result.unreferenced_files)} unreferenced"
     )
     print(f"index: {result.unindexed_images} images missing vectors ({MODEL_NAME})")
+    print(f"samples: {result.user_samples} confirmed user images")
     print(
         f"coverage: {result.jp_missing} printings without JP art, "
         f"{result.image_misses} recorded misses"
@@ -387,6 +403,71 @@ def _identify(args: argparse.Namespace) -> int:
         print("warnings:")
         for warning in report["warnings"]:
             print(f"  {warning['code']}: {warning['message']}")
+    return 0
+
+
+def _samples_add(args: argparse.Namespace) -> int:
+    from tcg_scanner.samples import add_sample
+
+    init_catalog(config.catalog_db())
+    conn = open_catalog(config.catalog_db())
+    try:
+        sample = add_sample(
+            conn,
+            config.data_dir(),
+            image=args.image,
+            card_code=args.card_code,
+            print_index=args.print_index,
+            language=args.language,
+        )
+    except (OSError, ValueError) as error:
+        print(error, file=sys.stderr)
+        return 1
+    finally:
+        conn.close()
+
+    if not sample.rectified:
+        print("warning: card edge not found; stored the image unrectified", file=sys.stderr)
+    print(f"sample {sample.id}: {sample.path}")
+    print("run `tcg-scanner index build` to include it")
+    return 0
+
+
+def _samples_list(args: argparse.Namespace) -> int:
+    from tcg_scanner.samples import list_samples
+
+    init_catalog(config.catalog_db())
+    conn = open_catalog(config.catalog_db())
+    try:
+        rows = list_samples(conn, card_code=args.card_code)
+    finally:
+        conn.close()
+
+    if not rows:
+        print("no samples")
+        return 0
+    for row in rows:
+        print(
+            f"{row['id']:>4}  {row['card_code']} #{row['print_index']}  "
+            f"{row['language']}  {row['path']}"
+        )
+    return 0
+
+
+def _samples_remove(args: argparse.Namespace) -> int:
+    from tcg_scanner.samples import remove_sample
+
+    init_catalog(config.catalog_db())
+    conn = open_catalog(config.catalog_db())
+    try:
+        path = remove_sample(conn, config.data_dir(), args.sample_id)
+    except ValueError as error:
+        print(error, file=sys.stderr)
+        return 1
+    finally:
+        conn.close()
+
+    print(f"removed sample {args.sample_id}: {path}")
     return 0
 
 
