@@ -273,3 +273,27 @@ def collection_total(rows: list[sqlite3.Row]) -> tuple[float, int]:
         else:
             total += row["price"] * row["quantity"]
     return total, unpriced
+
+
+def list_matches(conn: sqlite3.Connection, *, status: str = "pending") -> list[sqlite3.Row]:
+    if status not in ("pending", "accepted", "rejected", "all"):
+        raise ValueError(f"unknown match status: {status}")
+
+    clause = "" if status == "all" else "WHERE matches.status = ?"
+    params: tuple[object, ...] = () if status == "all" else (status,)
+    return conn.execute(
+        f"""
+        SELECT matches.id, matches.status, matches.confidence, matches.method,
+               matches.created_at, matches.card_code, matches.print_index,
+               matches.card_name, matches.set_code, matches.variant_label,
+               matches.image_url, printing.card_code AS resolved
+        FROM matches
+        LEFT JOIN catalog.printings AS printing
+            ON printing.card_code = matches.card_code
+            AND printing.print_index = matches.print_index
+            AND printing.image_url = matches.image_url
+        {clause}
+        ORDER BY matches.id
+        """,
+        params,
+    ).fetchall()

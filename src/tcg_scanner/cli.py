@@ -90,6 +90,12 @@ def build_parser() -> argparse.ArgumentParser:
     accept.add_argument("--language")
     reject = matches_commands.add_parser("reject", help="reject a pending match")
     reject.add_argument("match_id", type=int)
+    matches_list = matches_commands.add_parser("list", help="list recorded matches")
+    matches_list.add_argument(
+        "--status",
+        default="pending",
+        choices=["pending", "accepted", "rejected", "all"],
+    )
 
     owned = commands.add_parser("owned", help="manage the owned collection")
     owned_commands = owned.add_subparsers(dest="owned_command", required=True)
@@ -138,6 +144,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         ("identify", None): _identify,
         ("matches", "accept"): _matches_accept,
         ("matches", "reject"): _matches_reject,
+        ("matches", "list"): _matches_list,
         ("owned", "add"): _owned_add,
         ("owned", "update"): _owned_update,
         ("owned", "remove"): _owned_remove,
@@ -535,6 +542,40 @@ def _owned_add(args: argparse.Namespace) -> int:
         conn.close()
 
     print(f"owned {owned_id}: {_describe_printing(printing)} x{args.quantity}")
+    return 0
+
+
+def _matches_list(args: argparse.Namespace) -> int:
+    from tcg_scanner.db.library import list_matches
+
+    conn = _open_library_with_catalog()
+    try:
+        rows = list_matches(conn, status=args.status)
+    except ValueError as error:
+        print(error, file=sys.stderr)
+        return 1
+    finally:
+        conn.close()
+
+    if not rows:
+        print(f"no {args.status} matches")
+        return 0
+
+    for row in rows:
+        if row["card_code"] is None:
+            card = "no match"
+            stale = ""
+        else:
+            card = (
+                f"{row['card_code']} #{row['print_index']} {row['card_name']} "
+                f"({row['set_code']}, {row['variant_label']})"
+            )
+            stale = "" if row["resolved"] else "  [stale snapshot]"
+        confidence = "-" if row["confidence"] is None else f"{row['confidence']:.3f}"
+        print(
+            f"{row['id']:>4}  {row['status']:<8}  {confidence:>5}  {card}{stale}  "
+            f"{row['created_at']}"
+        )
     return 0
 
 

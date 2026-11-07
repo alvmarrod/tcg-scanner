@@ -7,6 +7,7 @@ from tcg_scanner.db.library import (
     add_owned,
     add_photo,
     collection_total,
+    list_matches,
     list_owned,
     reject_match,
     remove_owned,
@@ -321,5 +322,53 @@ def test_owned_list_eur_source_does_not_fall_back(tmp_path):
         add_owned(conn, card_code="OP08-001", print_index=0)
         row = list_owned(conn, source="eur")[0]
         assert row["price"] is None
+    finally:
+        conn.close()
+
+
+def test_list_matches_filters_by_status_and_enriches_rows(tmp_path):
+    conn = _library(tmp_path, _catalog(tmp_path))
+    try:
+        pending = _match(conn)
+        accepted = _match(conn)
+        accept_match(conn, accepted)
+
+        pending_rows = list_matches(conn)
+        assert [row["id"] for row in pending_rows] == [pending]
+        assert pending_rows[0]["card_code"] == "OP08-001"
+        assert pending_rows[0]["card_name"] == "Chopper"
+        assert pending_rows[0]["resolved"] == "OP08-001"
+
+        all_rows = list_matches(conn, status="all")
+        assert {row["id"]: row["status"] for row in all_rows} == {
+            pending: "pending",
+            accepted: "accepted",
+        }
+    finally:
+        conn.close()
+
+
+def test_list_matches_marks_a_stale_snapshot(tmp_path):
+    conn = _library(tmp_path, _catalog(tmp_path))
+    try:
+        match_id = _match(conn)
+        conn.execute(
+            "UPDATE catalog.printings SET image_url = 'http://img/renumbered.webp' "
+            "WHERE card_code = 'OP08-001' AND print_index = 0"
+        )
+
+        row = list_matches(conn)[0]
+
+        assert row["id"] == match_id
+        assert row["resolved"] is None
+    finally:
+        conn.close()
+
+
+def test_list_matches_rejects_an_unknown_status(tmp_path):
+    conn = _library(tmp_path, _catalog(tmp_path))
+    try:
+        with pytest.raises(ValueError, match="unknown match status"):
+            list_matches(conn, status="maybe")
     finally:
         conn.close()
