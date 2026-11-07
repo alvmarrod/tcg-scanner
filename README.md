@@ -79,6 +79,8 @@ uv run tcg-scanner index build
 uv run tcg-scanner inspect path/to/photo.jpg
 uv run tcg-scanner identify path/to/photo.jpg          # JSON
 uv run tcg-scanner identify --text path/to/photo.jpg   # human table
+uv run tcg-scanner batch
+uv run tcg-scanner matches list
 uv run tcg-scanner matches accept 12
 uv run tcg-scanner owned list
 uv run tcg-scanner owned add OP08-001 1
@@ -121,8 +123,14 @@ scores, which reference language was used, prices, and a `warnings` array. `--te
 prints the simpler table. References are preferred in Japanese (`--prefer en` to
 change); a fallback to English is reported, never silent.
 
-`matches accept <id>` marks a pending match accepted and adds its printing to the
-collection; `matches reject <id>` closes it without touching the collection.
+`batch` identifies every image in `data/input/` (or `--input DIR`), writes one JSON
+report per photo to `data/output/` and records a pending match for each. A broken file
+does not stop the run; the command exits 1 if any file failed.
+
+`matches list [--status pending|accepted|rejected|all]` shows recorded matches and
+marks rows whose snapshot no longer resolves as stale. `matches accept <id>` marks a
+pending match accepted and adds its printing to the collection; `matches reject <id>`
+closes it without touching the collection.
 `owned list` shows the collection with the latest catalog prices, and
 `owned add <card_code> <print_index>` adds a card by hand. Re-adding the same
 printing, condition and language increments the quantity instead of creating a new

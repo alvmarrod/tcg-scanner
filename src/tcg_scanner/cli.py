@@ -121,6 +121,11 @@ def build_parser() -> argparse.ArgumentParser:
     owned_list = owned_commands.add_parser("list", help="list the collection with latest prices")
     owned_list.add_argument("--source", default="auto", choices=["auto", "eur", "usd"])
 
+    batch = commands.add_parser("batch", help="identify every photo in a folder")
+    batch.add_argument("--input", type=Path, default=None, metavar="DIR")
+    batch.add_argument("--top", type=int, default=5, metavar="N")
+    batch.add_argument("--prefer", choices=["jp", "en"], default="jp")
+
     evaluation = commands.add_parser("eval", help="score recognition against labeled photos")
     evaluation.add_argument(
         "labels", type=Path, nargs="?", default=None, metavar="CSV", help="labels CSV"
@@ -149,6 +154,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         ("owned", "update"): _owned_update,
         ("owned", "remove"): _owned_remove,
         ("owned", "list"): _owned_list,
+        ("batch", None): _batch,
         ("eval", None): _evaluate,
     }
     handler = handlers.get((args.command, getattr(args, f"{args.command}_command", None)))
@@ -345,49 +351,37 @@ def _snapshot(candidate) -> dict[str, object]:
     }
 
 
-def _identify(args: argparse.Namespace) -> int:
-    _require_recognition("easyocr", "timm")
+def _run_identification(image, *, embedder, reader, conn, index, top, prefer):
+    from tcg_scanner.imaging.rectify import rectify_file
+    from tcg_scanner.recognition.match import identify, verify
 
-    import json
+    rectified = rectify_file(image)
+    reading = reader.read(rectified.image)
+    query, patches = embedder.embed_bgr(rectified.image)
+    search = identify(
+        conn,
+        index,
+        query[0],
+        code=reading.code,
+        preferred_language=prefer,
+        top_k=top,
+    )
+    candidates = verify(conn, search.candidates, patches[0], embedder.model_name)
+    prices = _latest_prices(conn, candidates[0]) if candidates else _no_prices()
+    return rectified, reading, search, candidates, prices
+
+
+def _record_match(image, *, search, top) -> int:
     from datetime import UTC, datetime
 
     from tcg_scanner.db import open_library
     from tcg_scanner.db.library import add_match, add_photo
     from tcg_scanner.images import file_sha256
-    from tcg_scanner.imaging.rectify import rectify_file
-    from tcg_scanner.recognition.embed import Embedder
-    from tcg_scanner.recognition.index import load_index
-    from tcg_scanner.recognition.match import identify, verify
-    from tcg_scanner.recognition.ocr import CodeReader
-    from tcg_scanner.recognition.report import build_report
 
-    init_catalog(config.catalog_db())
-    rectified = rectify_file(args.image)
-    reading = CodeReader().read(rectified.image)
-    embedder = Embedder()
-    query, patches = embedder.embed_bgr(rectified.image)
-
-    conn = open_catalog(config.catalog_db())
-    try:
-        index = load_index(conn, embedder.model_name)
-        search = identify(
-            conn,
-            index,
-            query[0],
-            code=reading.code,
-            preferred_language=args.prefer,
-            top_k=args.top,
-        )
-        candidates = verify(conn, search.candidates, patches[0], embedder.model_name)
-        prices = _latest_prices(conn, candidates[0]) if candidates else _no_prices()
-    finally:
-        conn.close()
-
-    top = candidates[0] if candidates else None
     init_library(config.library_db())
     library = open_library(config.library_db())
     try:
-        photo_id = add_photo(library, path=str(args.image), sha256=file_sha256(args.image))
+        photo_id = add_photo(library, path=str(image), sha256=file_sha256(image))
         match_id = add_match(
             library,
             photo_id=photo_id,
@@ -399,7 +393,39 @@ def _identify(args: argparse.Namespace) -> int:
         library.commit()
     finally:
         library.close()
+    return match_id
 
+
+def _identify(args: argparse.Namespace) -> int:
+    _require_recognition("easyocr", "timm")
+
+    import json
+
+    from tcg_scanner.recognition.embed import Embedder
+    from tcg_scanner.recognition.index import load_index
+    from tcg_scanner.recognition.ocr import CodeReader
+    from tcg_scanner.recognition.report import build_report
+
+    init_catalog(config.catalog_db())
+    embedder = Embedder()
+    reader = CodeReader()
+    conn = open_catalog(config.catalog_db())
+    try:
+        index = load_index(conn, embedder.model_name)
+        rectified, reading, search, candidates, prices = _run_identification(
+            args.image,
+            embedder=embedder,
+            reader=reader,
+            conn=conn,
+            index=index,
+            top=args.top,
+            prefer=args.prefer,
+        )
+    finally:
+        conn.close()
+
+    top = candidates[0] if candidates else None
+    match_id = _record_match(args.image, search=search, top=top)
     report = build_report(
         image=args.image,
         rectified=rectified,
@@ -436,6 +462,81 @@ def _identify(args: argparse.Namespace) -> int:
             print(f"  {warning['code']}: {warning['message']}")
     print(f"match {match_id} (pending)")
     return 0
+
+
+def _batch(args: argparse.Namespace) -> int:
+    _require_recognition("easyocr", "timm")
+
+    import json
+
+    from tcg_scanner.batch import find_images, result_path
+    from tcg_scanner.recognition.embed import Embedder
+    from tcg_scanner.recognition.index import load_index
+    from tcg_scanner.recognition.ocr import CodeReader
+    from tcg_scanner.recognition.report import build_report
+
+    input_dir = args.input or config.input_dir()
+    images = find_images(input_dir)
+    if not images:
+        print(f"no images in {input_dir}")
+        return 0
+
+    output_dir = config.output_dir()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    init_catalog(config.catalog_db())
+    init_library(config.library_db())
+
+    embedder = Embedder()
+    reader = CodeReader()
+    matched = no_match = failed = 0
+    conn = open_catalog(config.catalog_db())
+    try:
+        index = load_index(conn, embedder.model_name)
+        for position, image in enumerate(images, start=1):
+            try:
+                rectified, reading, search, candidates, prices = _run_identification(
+                    image,
+                    embedder=embedder,
+                    reader=reader,
+                    conn=conn,
+                    index=index,
+                    top=args.top,
+                    prefer=args.prefer,
+                )
+            except (OSError, ValueError) as error:
+                failed += 1
+                print(f"[{position}/{len(images)}] {image.name}  failed: {error}", file=sys.stderr)
+                continue
+
+            top = candidates[0] if candidates else None
+            match_id = _record_match(image, search=search, top=top)
+            report = build_report(
+                image=image,
+                rectified=rectified,
+                reading=reading,
+                search=search,
+                candidates=candidates,
+                prices=prices,
+                match_id=match_id,
+                preferred_language=args.prefer,
+            )
+            path = result_path(output_dir, image)
+            path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+
+            if top is None:
+                no_match += 1
+                summary = "no match"
+            else:
+                matched += 1
+                summary = f"{top.card_code} #{top.print_index} {top.score:.3f} {top.card_name}"
+            print(f"[{position}/{len(images)}] {image.name}  {summary}  -> {path.name}")
+            for warning in report["warnings"]:
+                print(f"  warning: {warning['code']}: {warning['message']}", file=sys.stderr)
+    finally:
+        conn.close()
+
+    print(f"matched {matched}, no match {no_match}, failed {failed}; results in {output_dir}")
+    return 0 if failed == 0 else 1
 
 
 def _no_prices() -> dict[str, object]:
