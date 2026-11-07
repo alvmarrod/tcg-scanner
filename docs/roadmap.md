@@ -11,7 +11,7 @@ Legend: ⬜ not started · ✅ done
 6. ⬜ **[I] Batch input over `data/input/`** — run identification over a folder and write one result per photo. The original use case is a set of pictures, not one.
 7. ⬜ **[D/I] Full catalog coverage** — `catalog sync --all`, promos, Japanese; verify the parser on sets whose print layouts differ (ST, EB, PRB) instead of only OP08.
 8. ⬜ **[Dsn] Multi-photo grouping** — how several photos of the same card combine before matching: aggregate scores, use the best, front/back, discard blurry duplicates. Currently one photo equals one match.
-9. ⬜ **[I] Price refresh path** — re-syncing a set already appends prices, but there's no lightweight "refresh all prices" and no cadence.
+9. ✅ **[I] Price refresh path** — re-syncing a set already appends prices, but there's no lightweight "refresh all prices" and no cadence.
 10. ⬜ **[I] Collection ergonomics** — merge quantity on repeat accept, edit/delete owned rows, condition/language defaults, total collection value.
 11. ⬜ **[I] `db check`** — report owned/matches whose snapshot no longer resolves after a re-sync, orphan images, index drift. Makes the snapshot guard visible instead of silent.
 12. ✅ **[I] Schema versioning/migrations** — `PRAGMA user_version` plus real migrations. `CREATE IF NOT EXISTS` cannot evolve `library.db`, which now holds user data.

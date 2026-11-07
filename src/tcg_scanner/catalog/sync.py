@@ -34,6 +34,13 @@ class SyncResult:
     images: int
 
 
+@dataclass(frozen=True)
+class PriceRefresh:
+    sets: int
+    prices: int
+    unknown: int
+
+
 def sync_set(
     conn: sqlite3.Connection,
     set_code: str,
@@ -127,6 +134,62 @@ def sync_set(
         prices=prices,
         images=images,
     )
+
+
+def refresh_prices(
+    conn: sqlite3.Connection,
+    fetcher: Fetcher,
+    set_codes: list[str] | None = None,
+    *,
+    now: str | None = None,
+) -> PriceRefresh:
+    """Append changed prices for already-synced sets; never creates printings."""
+    index = {entry.code: entry for entry in parse_index(fetcher.text("/cards"))}
+    if set_codes:
+        targets = [code.upper() for code in set_codes]
+        for code in targets:
+            if code not in index:
+                raise ValueError(f"unknown set code: {code}")
+    else:
+        targets = [
+            row[0] for row in conn.execute("SELECT DISTINCT set_code FROM cards ORDER BY set_code")
+        ]
+
+    fetched_at = now or datetime.now(UTC).isoformat(timespec="seconds")
+    known = {
+        (row[0], row[1]) for row in conn.execute("SELECT card_code, print_index FROM printings")
+    }
+    prices = 0
+    unknown: set[tuple[str, int]] = set()
+
+    for code in targets:
+        entry = index.get(code)
+        if entry is None:
+            continue
+        cards = parse_cards(fetcher.text(f"/cards/{entry.slug}?display=full"))
+        for card in cards:
+            for printing in card.printings:
+                key = (card.code, printing.print_index)
+                if key not in known:
+                    unknown.add(key)
+                    continue
+                for source, currency, amount in (
+                    ("tcgplayer", "USD", printing.usd),
+                    ("cardmarket", "EUR", printing.eur),
+                ):
+                    if amount is not None and catalog.add_price(
+                        conn,
+                        card_code=key[0],
+                        print_index=key[1],
+                        source=source,
+                        currency=currency,
+                        amount=amount,
+                        fetched_at=fetched_at,
+                    ):
+                        prices += 1
+
+    conn.commit()
+    return PriceRefresh(sets=len(targets), prices=prices, unknown=len(unknown))
 
 
 def _set_for_name(conn: sqlite3.Connection, name: str, by_name: dict[str, str]) -> str:

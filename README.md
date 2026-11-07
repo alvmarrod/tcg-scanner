@@ -68,6 +68,7 @@ baseline; later changes are ordered migrations in `db/conn.py` and run on open.
 uv run tcg-scanner db init
 uv run tcg-scanner catalog sync --set OP08
 uv run tcg-scanner catalog sync --set OP08 --no-images
+uv run tcg-scanner prices refresh
 uv run tcg-scanner index build
 uv run tcg-scanner inspect path/to/photo.jpg
 uv run tcg-scanner identify path/to/photo.jpg
@@ -80,6 +81,10 @@ uv run tcg-scanner eval data/eval/labels.csv
 reference images under `data/`, and is incremental: re-running adds only new price
 points and missing images. Image downloads use a small worker pool while request
 starts stay throttled.
+
+`prices refresh` appends only price points that changed, for one `--set` or every
+synced set. It never creates printings, so run `catalog sync` first. There is no
+built-in scheduler: run it from cron or a systemd timer if you want a cadence.
 
 `index build` embeds every reference image that has no vector yet. The first run
 downloads the DINOv2 weights (~85 MB); it uses CUDA when available.

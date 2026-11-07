@@ -31,6 +31,18 @@ def build_parser() -> argparse.ArgumentParser:
     sync.add_argument("--set", required=True, metavar="CODE", help="set code, e.g. OP08")
     sync.add_argument("--no-images", action="store_true", help="skip downloading card images")
 
+    prices = commands.add_parser("prices", help="refresh price history")
+    price_commands = prices.add_subparsers(dest="prices_command", required=True)
+    price_refresh = price_commands.add_parser(
+        "refresh", help="append changed price points for synced sets"
+    )
+    price_refresh.add_argument(
+        "--set",
+        action="append",
+        metavar="CODE",
+        help="limit to a set code (repeatable); default is every synced set",
+    )
+
     index = commands.add_parser("index", help="build the recognition index")
     index_commands = index.add_subparsers(dest="index_command", required=True)
     build = index_commands.add_parser("build", help="embed reference images with DINOv2")
@@ -84,6 +96,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     handlers = {
         ("db", "init"): _db_init,
         ("catalog", "sync"): _catalog_sync,
+        ("prices", "refresh"): _prices_refresh,
         ("index", "build"): _index_build,
         ("inspect", None): _inspect,
         ("identify", None): _identify,
@@ -152,6 +165,30 @@ def _progress(label: str):
             print(f"{label}: {done}/{total}", file=sys.stderr)
 
     return report
+
+
+def _prices_refresh(args: argparse.Namespace) -> int:
+    from tcg_scanner.catalog.sync import refresh_prices
+
+    init_catalog(config.catalog_db())
+    conn = open_catalog(config.catalog_db())
+    try:
+        with Fetcher() as fetcher:
+            result = refresh_prices(conn, fetcher, args.set)
+    except ValueError as error:
+        print(error, file=sys.stderr)
+        return 1
+    finally:
+        conn.close()
+
+    print(f"{result.sets} sets, {result.prices} new price points")
+    if result.unknown:
+        print(
+            f"{result.unknown} printings are missing from the catalog; "
+            "run `catalog sync` for their sets",
+            file=sys.stderr,
+        )
+    return 0
 
 
 def _index_build(args: argparse.Namespace) -> int:
