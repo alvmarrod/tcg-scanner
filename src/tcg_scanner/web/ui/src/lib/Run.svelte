@@ -236,7 +236,7 @@
         <div class="list-head">
           <span></span>
           <span class="head-cells">
-            <span>card</span><span>exp</span><span>score</span><span>EUR</span><span>USD</span><span></span>
+            <span></span><span>card</span><span>exp</span><span>score</span><span>EUR</span><span>USD</span><span></span>
           </span>
         </div>
         {#each results as result}
@@ -250,6 +250,7 @@
               />
             </label>
             <a class="row-link" href={`#/run/${enc(name)}/result/${enc(result.group)}`}>
+              <img class="row-thumb" src={result.input_thumb} alt={result.group} loading="lazy" />
               <span class="row-card">
                 <strong>{title(result)}</strong>
                 <span class="muted">{result.card_name ?? ''}</span>
