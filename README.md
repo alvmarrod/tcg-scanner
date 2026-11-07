@@ -42,6 +42,9 @@ Source: <https://onepiece.limitlesstcg.com/cards>
 Art variants (alternate arts, alternate rarities) can share a card code, so the unit
 that is recognized, stored and priced is the *printing*, not the card.
 
+Some prints exist only in Japanese; their Japanese image is stored and the catalog
+URL is updated to match.
+
 Card images and text are Eiichiro Oda / Shueisha, Toei Animation and Bandai copyright.
 Anything downloaded is for local matching only, not redistribution. Requests are
 throttled; sync one set at a time and do not hammer the source.

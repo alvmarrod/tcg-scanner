@@ -1,6 +1,13 @@
 from pathlib import Path
 
-from tcg_scanner.catalog.sync import sync_all, sync_set, sync_sets
+import httpx
+
+from tcg_scanner.catalog.sync import (
+    _download_images,
+    sync_all,
+    sync_set,
+    sync_sets,
+)
 from tcg_scanner.db import init_catalog, open_catalog
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -133,5 +140,51 @@ def test_sync_all_covers_every_booster_and_starter(tmp_path):
 
         assert {result.set_code for result in results} == {"EB05", "OP08", "OP01", "ST36"}
         assert sum(result.images for result in results) == 4
+    finally:
+        conn.close()
+
+
+def test_download_falls_back_to_the_japanese_image(tmp_path):
+    class JpFetcher:
+        def content(self, url: str) -> bytes:
+            if url.endswith("_EN.webp"):
+                request = httpx.Request("GET", url)
+                response = httpx.Response(403, request=request)
+                raise httpx.HTTPStatusError("forbidden", request=request, response=response)
+            return b"japanese image"
+
+    db_path = tmp_path / "catalog.db"
+    init_catalog(db_path)
+    conn = open_catalog(db_path)
+    try:
+        conn.execute(
+            "INSERT INTO sets (code, name, kind) VALUES ('OP08', 'Two Legends', 'booster')"
+        )
+        conn.execute(
+            "INSERT INTO cards (code, name, set_code) VALUES ('OP08-001', 'Chopper', 'OP08')"
+        )
+        conn.execute(
+            "INSERT INTO printings (card_code, print_index, set_code, variant_label, image_url) "
+            "VALUES ('OP08-001', 1, 'OP08', 'aa', "
+            "'https://cdn.example/OP08/OP08-001_p1_EN.webp')"
+        )
+        key = ("OP08-001", 1)
+
+        downloaded = _download_images(
+            conn,
+            JpFetcher(),
+            tmp_path,
+            [(key, "https://cdn.example/OP08/OP08-001_p1_EN.webp")],
+            workers=1,
+            on_progress=None,
+        )
+
+        assert downloaded == [key]
+        image_url = conn.execute(
+            "SELECT image_url FROM printings WHERE card_code = 'OP08-001' AND print_index = 1"
+        ).fetchone()[0]
+        assert image_url.endswith("_p1_JP.webp")
+        path = conn.execute("SELECT path FROM card_images").fetchone()[0]
+        assert (tmp_path / path).is_file()
     finally:
         conn.close()

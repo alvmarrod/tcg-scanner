@@ -163,3 +163,16 @@ def add_card_image(
         """,
         (card_code, print_index, path, sha256, width, height),
     )
+
+
+def set_printing_image_url(
+    conn: sqlite3.Connection,
+    *,
+    card_code: str,
+    print_index: int,
+    image_url: str,
+) -> None:
+    conn.execute(
+        "UPDATE printings SET image_url = ? WHERE card_code = ? AND print_index = ?",
+        (image_url, card_code, print_index),
+    )

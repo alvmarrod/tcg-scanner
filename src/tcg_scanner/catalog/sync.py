@@ -307,6 +307,20 @@ def _set_for_name(conn: sqlite3.Connection, name: str, by_name: dict[str, str]) 
     return code
 
 
+def _fetch_image(fetcher: Fetcher, url: str) -> tuple[bytes, str]:
+    """Fetch a reference image, falling back to its Japanese print.
+
+    Some reprinted arts exist only in Japanese; the English URL 403s for them.
+    """
+    try:
+        return fetcher.content(url), url
+    except httpx.HTTPStatusError:
+        if "_EN." not in url:
+            raise
+        fallback = url.replace("_EN.", "_JP.")
+        return fetcher.content(fallback), fallback
+
+
 def _download_images(
     conn: sqlite3.Connection,
     fetcher: Fetcher,
@@ -321,11 +335,11 @@ def _download_images(
 
     downloaded: list[PrintingKey] = []
     with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
-        futures = {pool.submit(fetcher.content, url): (key, url) for key, url in jobs}
+        futures = {pool.submit(_fetch_image, fetcher, url): (key, url) for key, url in jobs}
         for future in as_completed(futures):
             printing_key, url = futures[future]
             try:
-                data = future.result()
+                data, actual_url = future.result()
             except httpx.HTTPStatusError as error:
                 print(f"warning: {url}: HTTP {error.response.status_code}", file=sys.stderr)
                 continue
@@ -333,7 +347,16 @@ def _download_images(
                 print(f"warning: {url}: {type(error).__name__}", file=sys.stderr)
                 continue
 
-            path, digest = store_image(data, data_root, Path(urlsplit(url).path).suffix or ".webp")
+            if actual_url != url:
+                catalog.set_printing_image_url(
+                    conn,
+                    card_code=printing_key[0],
+                    print_index=printing_key[1],
+                    image_url=actual_url,
+                )
+            path, digest = store_image(
+                data, data_root, Path(urlsplit(actual_url).path).suffix or ".webp"
+            )
             catalog.add_card_image(
                 conn,
                 card_code=printing_key[0],
