@@ -338,102 +338,29 @@ def _inspect(args: argparse.Namespace) -> int:
     return 0
 
 
-def _snapshot(candidate) -> dict[str, object]:
-    if candidate is None:
-        return {}
-    return {
-        "card_code": candidate.card_code,
-        "print_index": candidate.print_index,
-        "card_name": candidate.card_name,
-        "set_code": candidate.set_code,
-        "variant_label": candidate.variant_label,
-        "image_url": candidate.image_url,
-    }
-
-
-def _run_identification(image, *, embedder, reader, conn, index, top, prefer):
-    from tcg_scanner.imaging.rectify import rectify_file
-    from tcg_scanner.recognition.match import identify, verify
-
-    rectified = rectify_file(image)
-    reading = reader.read(rectified.image)
-    query, patches = embedder.embed_bgr(rectified.image)
-    search = identify(
-        conn,
-        index,
-        query[0],
-        code=reading.code,
-        preferred_language=prefer,
-        top_k=top,
-    )
-    candidates = verify(conn, search.candidates, patches[0], embedder.model_name)
-    prices = _latest_prices(conn, candidates[0]) if candidates else _no_prices()
-    return rectified, reading, search, candidates, prices
-
-
-def _record_match(image, *, search, top) -> int:
-    from datetime import UTC, datetime
-
-    from tcg_scanner.db import open_library
-    from tcg_scanner.db.library import add_match, add_photo
-    from tcg_scanner.images import file_sha256
-
-    init_library(config.library_db())
-    library = open_library(config.library_db())
-    try:
-        photo_id = add_photo(library, path=str(image), sha256=file_sha256(image))
-        match_id = add_match(
-            library,
-            photo_id=photo_id,
-            confidence=top.score if top else None,
-            method="ocr+dinov2" if search.code_used else "dinov2",
-            created_at=datetime.now(UTC).isoformat(timespec="seconds"),
-            **_snapshot(top),
-        )
-        library.commit()
-    finally:
-        library.close()
-    return match_id
-
-
 def _identify(args: argparse.Namespace) -> int:
     _require_recognition("easyocr", "timm")
 
     import json
 
-    from tcg_scanner.recognition.embed import Embedder
-    from tcg_scanner.recognition.index import load_index
-    from tcg_scanner.recognition.ocr import CodeReader
+    from tcg_scanner.recognition.api import Recognizer, fuse
     from tcg_scanner.recognition.report import build_report
 
     init_catalog(config.catalog_db())
-    embedder = Embedder()
-    reader = CodeReader()
     conn = open_catalog(config.catalog_db())
     try:
-        index = load_index(conn, embedder.model_name)
-        rectified, reading, search, candidates, prices = _run_identification(
-            args.image,
-            embedder=embedder,
-            reader=reader,
-            conn=conn,
-            index=index,
-            top=args.top,
-            prefer=args.prefer,
-        )
+        recognizer = Recognizer(conn, prefer=args.prefer, top_k=args.top)
+        recognition = recognizer.recognize(args.image)
+        fused = fuse([recognition], top_k=args.top)
+        prices = _latest_prices(conn, fused.candidates[0]) if fused.candidates else _no_prices()
+        index_size = len(recognizer.index)
     finally:
         conn.close()
 
-    top = candidates[0] if candidates else None
-    match_id = _record_match(args.image, search=search, top=top)
     report = build_report(
-        image=args.image,
-        rectified=rectified,
-        reading=reading,
-        search=search,
-        candidates=candidates,
+        group=args.image.name,
+        fused=fused,
         prices=prices,
-        match_id=match_id,
         preferred_language=args.prefer,
     )
 
@@ -441,26 +368,25 @@ def _identify(args: argparse.Namespace) -> int:
         print(json.dumps(report, indent=2))
         return 0
 
-    print(f"card edge: {'found' if rectified.found else 'not found'}")
-    print(f"code: {reading.code or 'unreadable'}")
-    for position, candidate in enumerate(candidates, start=1):
+    print(f"card edge: {'found' if fused.representative.rectified.found else 'not found'}")
+    print(f"code: {fused.ocr_code or 'unreadable'}")
+    for position, candidate in enumerate(fused.candidates, start=1):
         patch = f"  patch {candidate.patch_score:.3f}" if candidate.patch_score is not None else ""
         print(
             f"{position:>2}. {candidate.score:.3f}{patch}  {candidate.card_code}  "
             f"{candidate.card_name}  ({candidate.set_code}, {candidate.variant_label})  "
             f"[{candidate.reference_language}]"
         )
-    if not candidates:
+    if not fused.candidates:
         print("no match")
-        if len(index) == 0:
+        if index_size == 0:
             print("index is empty: run `tcg-scanner index build`")
-    elif len(candidates) > 1:
-        print(f"margin: {candidates[0].score - candidates[1].score:.3f}")
+    elif len(fused.candidates) > 1:
+        print(f"margin: {fused.candidates[0].score - fused.candidates[1].score:.3f}")
     if report["warnings"]:
         print("warnings:")
         for warning in report["warnings"]:
             print(f"  {warning['code']}: {warning['message']}")
-    print(f"match {match_id} (pending)")
     return 0
 
 
@@ -469,58 +395,45 @@ def _batch(args: argparse.Namespace) -> int:
 
     import json
 
-    from tcg_scanner.batch import find_images, result_path
-    from tcg_scanner.recognition.embed import Embedder
-    from tcg_scanner.recognition.index import load_index
-    from tcg_scanner.recognition.ocr import CodeReader
+    from tcg_scanner.batch import discover_groups, result_path
+    from tcg_scanner.recognition.api import Recognizer, fuse
     from tcg_scanner.recognition.report import build_report
 
     input_dir = args.input or config.input_dir()
-    images = find_images(input_dir)
-    if not images:
+    groups = discover_groups(input_dir)
+    if not groups:
         print(f"no images in {input_dir}")
         return 0
 
     output_dir = config.output_dir()
     output_dir.mkdir(parents=True, exist_ok=True)
     init_catalog(config.catalog_db())
-    init_library(config.library_db())
 
-    embedder = Embedder()
-    reader = CodeReader()
     matched = no_match = failed = 0
     conn = open_catalog(config.catalog_db())
     try:
-        index = load_index(conn, embedder.model_name)
-        for position, image in enumerate(images, start=1):
-            try:
-                rectified, reading, search, candidates, prices = _run_identification(
-                    image,
-                    embedder=embedder,
-                    reader=reader,
-                    conn=conn,
-                    index=index,
-                    top=args.top,
-                    prefer=args.prefer,
-                )
-            except (OSError, ValueError) as error:
-                failed += 1
-                print(f"[{position}/{len(images)}] {image.name}  failed: {error}", file=sys.stderr)
+        recognizer = Recognizer(conn, prefer=args.prefer, top_k=args.top)
+        for position, group in enumerate(groups, start=1):
+            recognitions = []
+            for image in group.images:
+                try:
+                    recognitions.append(recognizer.recognize(image))
+                except (OSError, ValueError) as error:
+                    failed += 1
+                    print(f"  {image.name}: failed: {error}", file=sys.stderr)
+            if not recognitions:
                 continue
 
-            top = candidates[0] if candidates else None
-            match_id = _record_match(image, search=search, top=top)
+            fused = fuse(recognitions, top_k=args.top)
+            top = fused.candidates[0] if fused.candidates else None
+            prices = _latest_prices(conn, top) if top is not None else _no_prices()
             report = build_report(
-                image=image,
-                rectified=rectified,
-                reading=reading,
-                search=search,
-                candidates=candidates,
+                group=group.name,
+                fused=fused,
                 prices=prices,
-                match_id=match_id,
                 preferred_language=args.prefer,
             )
-            path = result_path(output_dir, image)
+            path = result_path(output_dir, group.name)
             path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
 
             if top is None:
@@ -529,13 +442,19 @@ def _batch(args: argparse.Namespace) -> int:
             else:
                 matched += 1
                 summary = f"{top.card_code} #{top.print_index} {top.score:.3f} {top.card_name}"
-            print(f"[{position}/{len(images)}] {image.name}  {summary}  -> {path.name}")
+            state = "excluded" if len(recognitions) == len(fused.excluded) else "used"
+            print(
+                f"[{position}/{len(groups)}] {group.name} "
+                f"({len(recognitions)} photos, {state})  {summary}  -> {path.name}"
+            )
             for warning in report["warnings"]:
                 print(f"  warning: {warning['code']}: {warning['message']}", file=sys.stderr)
     finally:
         conn.close()
 
-    print(f"matched {matched}, no match {no_match}, failed {failed}; results in {output_dir}")
+    print(
+        f"{matched} matched, {no_match} no match, {failed} failed photos; results in {output_dir}"
+    )
     return 0 if failed == 0 else 1
 
 
@@ -758,11 +677,7 @@ def _evaluate(args: argparse.Namespace) -> int:
     import json
 
     from tcg_scanner.eval.run import evaluate, load_labels, score_summary
-    from tcg_scanner.imaging.rectify import rectify_file
-    from tcg_scanner.recognition.embed import Embedder
-    from tcg_scanner.recognition.index import load_index
-    from tcg_scanner.recognition.match import identify, verify
-    from tcg_scanner.recognition.ocr import CodeReader
+    from tcg_scanner.recognition.api import Recognizer
 
     labels_path = args.labels or (config.data_dir() / "eval" / "labels.csv")
     try:
@@ -774,17 +689,11 @@ def _evaluate(args: argparse.Namespace) -> int:
     init_catalog(config.catalog_db())
     conn = open_catalog(config.catalog_db())
     try:
-        embedder = Embedder()
-        reader = CodeReader()
-        index = load_index(conn, embedder.model_name)
+        recognizer = Recognizer(conn, prefer="jp", top_k=args.top)
 
         def predict(image):
-            rectified = rectify_file(image)
-            reading = reader.read(rectified.image)
-            query, patches = embedder.embed_bgr(rectified.image)
-            search = identify(conn, index, query[0], code=reading.code, top_k=args.top)
-            candidates = verify(conn, search.candidates, patches[0], embedder.model_name)
-            return reading.code, candidates
+            recognition = recognizer.recognize(image)
+            return recognition.reading.code, recognition.candidates
 
         report = evaluate(labels, predict, top_k=args.top)
     finally:

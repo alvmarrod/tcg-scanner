@@ -3,6 +3,7 @@ from pathlib import Path
 import numpy as np
 
 from tcg_scanner.imaging.rectify import Rectified
+from tcg_scanner.recognition.api import _recognition_warnings, fuse
 from tcg_scanner.recognition.match import Candidate, SearchResult
 from tcg_scanner.recognition.ocr import CodeReading
 from tcg_scanner.recognition.report import build_report
@@ -26,29 +27,42 @@ def _candidate(**overrides):
     return Candidate(**values)
 
 
-def _report(candidates, *, reading=None, code_used=False, found=True):
+def _recognition(name, candidates, *, code="OP15-002", code_used=True, found=True):
+    from tcg_scanner.recognition.api import Recognition
+
     rectified = Rectified(
         image=np.zeros((838, 600, 3), dtype=np.uint8),
         found=found,
         corners=CORNERS if found else None,
         source_size=(1200, 1600),
     )
-    return build_report(
-        image=Path("photo.jpg"),
+    reading = CodeReading(code=code, confidence=0.8)
+    search = SearchResult(candidates=candidates, code_used=code_used)
+    return Recognition(
+        image=Path(name),
         rectified=rectified,
-        reading=reading or CodeReading(code="OP15-002", confidence=0.8),
-        search=SearchResult(candidates=candidates, code_used=code_used),
+        reading=reading,
+        search=search,
         candidates=candidates,
+        warnings=_recognition_warnings(rectified, reading, search),
+    )
+
+
+def _report(candidates, *, code="OP15-002", code_used=True, found=True):
+    recognition = _recognition("photo.jpg", candidates, code=code, code_used=code_used, found=found)
+    return build_report(
+        group="photo.jpg",
+        fused=fuse([recognition]),
         prices={"eur": 0.19, "usd": 0.20, "currency": "EUR"},
-        match_id=7,
     )
 
 
 def test_report_describes_a_match():
-    report = _report([_candidate(), _candidate(card_code="OP10-099", score=0.8)], code_used=True)
+    report = _report([_candidate(), _candidate(card_code="OP10-099", score=0.8)])
 
     assert report["status"] == "matched"
-    assert report["schema_version"] == 1
+    assert report["schema_version"] == 2
+    assert report["group"] == "photo.jpg"
     assert report["image"] == {"path": "photo.jpg", "width": 1200, "height": 1600}
     assert report["rectification"]["size"] == [600, 838]
     detection = report["detections"][0]
@@ -59,8 +73,9 @@ def test_report_describes_a_match():
     assert detection["reference"] == {"language": "jp", "preferred": "jp", "fallback": False}
     assert detection["card"]["metadata_language"] == "en"
     assert detection["ocr"]["used_as_filter"] is True
-    assert detection["prices"]["currency"] == "EUR"
+    assert report["prices"]["currency"] == "EUR"
     assert report["warnings"] == []
+    assert len(report["photos"]) == 1
 
 
 def test_report_warns_about_language_fallback():
@@ -72,7 +87,7 @@ def test_report_warns_about_language_fallback():
 
 
 def test_report_warns_when_the_code_hint_is_ignored():
-    report = _report([_candidate()], reading=CodeReading(code="DFO92-850"), code_used=False)
+    report = _report([_candidate()], code="DFO92-850", code_used=False)
 
     codes = [warning["code"] for warning in report["warnings"]]
     assert "ocr_hint_ignored" in codes
@@ -87,7 +102,7 @@ def test_report_warns_when_no_card_edge_was_found():
 
 
 def test_report_handles_no_match():
-    report = _report([], reading=CodeReading(code=None), code_used=False)
+    report = _report([], code=None, code_used=False)
 
     assert report["status"] == "no_match"
     assert report["detections"] == []

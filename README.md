@@ -116,21 +116,25 @@ downloads the DINOv2 weights (~85 MB); it uses CUDA when available.
 `inspect` rectifies a photo to the canonical card size, writes it to `data/output/`
 and reads the card code. The first run downloads the EasyOCR models (~100 MB).
 
-`identify` rectifies, reads the code, ranks printings against the reference index and
-records the attempt in `library.db` as a pending match. It prints JSON by default:
-card corners, OCR code with confidence and box, the matched printing, global and patch
-scores, which reference language was used, prices, and a `warnings` array. `--text`
-prints the simpler table. References are preferred in Japanese (`--prefer en` to
-change); a fallback to English is reported, never silent.
+`identify` rectifies, reads the code and ranks printings against the reference index.
+It is pure recognition: it never writes to `library.db`. It prints JSON by default
+(schema 2): card corners, OCR code with confidence and box, the matched printing,
+global and patch scores, which reference language was used, prices attached from the
+catalog, and a `warnings` array. `--text` prints the simpler table. References are
+preferred in Japanese (`--prefer en` to change); a fallback to English is reported,
+never silent.
 
-`batch` identifies every image in `data/input/` (or `--input DIR`), writes one JSON
-report per photo to `data/output/` and records a pending match for each. A broken file
-does not stop the run; the command exits 1 if any file failed.
+`batch` identifies every card in `data/input/` (or `--input DIR`). First-level folders
+are one card each (`card-001/front.jpg`, `card-001/back.jpg`); loose images become
+single-photo cards. Each group is fused (best score per printing, OCR majority,
+outlier photos excluded with a warning) and written as one JSON report to
+`data/output/<group>.json`. Nothing is written to `library.db`. A broken file does not
+stop the run; the command exits 1 if any file failed.
 
-`matches list [--status pending|accepted|rejected|all]` shows recorded matches and
-marks rows whose snapshot no longer resolves as stale. `matches accept <id>` marks a
-pending match accepted and adds its printing to the collection; `matches reject <id>`
-closes it without touching the collection.
+`matches` and `owned` are the collection module. They operate on rows you create
+manually (`owned add`) or record later through a future ingestion step; recognition no
+longer produces matches. `matches list [--status …]` marks rows whose snapshot no
+longer resolves as stale.
 `owned list` shows the collection with the latest catalog prices, and
 `owned add <card_code> <print_index>` adds a card by hand. Re-adding the same
 printing, condition and language increments the quantity instead of creating a new

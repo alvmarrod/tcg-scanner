@@ -33,17 +33,23 @@ class ReferenceIndex:
         return len(self.key_ids)
 
 
-def load_index(conn: sqlite3.Connection, model_name: str) -> ReferenceIndex:
+def load_index(
+    conn: sqlite3.Connection,
+    model_name: str,
+    *,
+    origins: tuple[str, ...] = ("reference",),
+) -> ReferenceIndex:
+    placeholders = ",".join("?" for _ in origins)
     rows = conn.execute(
-        """
+        f"""
         SELECT embedding.vector, embedding.dim,
                image.card_code, image.print_index, image.language
         FROM embeddings AS embedding
         JOIN card_images AS image ON image.id = embedding.card_image_id
-        WHERE embedding.model = ? AND embedding.kind = ?
+        WHERE embedding.model = ? AND embedding.kind = ? AND image.origin IN ({placeholders})
         ORDER BY embedding.card_image_id
         """,
-        (model_name, KIND_GLOBAL),
+        (model_name, KIND_GLOBAL, *origins),
     ).fetchall()
 
     if not rows:

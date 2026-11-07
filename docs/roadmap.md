@@ -10,7 +10,7 @@ Legend: ⬜ not started · ✅ done
 5. ✅ **[I] `matches list`** — list pending/accepted/rejected matches; right now the only way to accept is to remember the id printed by `identify`.
 6. ✅ **[I] Batch input over `data/input/`** — run identification over a folder and write one result per photo. The original use case is a set of pictures, not one.
 7. ✅ **[D/I] Full catalog coverage** — `catalog sync --all`, promos, Japanese; verify the parser on sets whose print layouts differ (ST, EB, PRB) instead of only OP08.
-8. ⬜ **[Dsn] Multi-photo grouping** — how several photos of the same card combine before matching: aggregate scores, use the best, front/back, discard blurry duplicates. Currently one photo equals one match.
+8. ✅ **[Dsn] Multi-photo grouping** — how several photos of the same card combine before matching: aggregate scores, use the best, front/back, discard blurry duplicates. Currently one photo equals one match.
 9. ✅ **[I] Price refresh path** — re-syncing a set already appends prices, but there's no lightweight "refresh all prices" and no cadence.
 10. ✅ **[I] Collection ergonomics** — merge quantity on repeat accept, edit/delete owned rows, condition/language defaults, total collection value.
 11. ✅ **[I] `db check`** — report owned/matches whose snapshot no longer resolves after a re-sync, orphan images, index drift. Makes the snapshot guard visible instead of silent.
@@ -23,5 +23,7 @@ Legend: ⬜ not started · ✅ done
 18. ⬜ **[Dsn] Recognition interface** — API, folder watcher or UI. Explicitly deferred at the start; this is where "how recognitions are grouped and exposed" resumes.
 19. ✅ **[I] Packaging/ops** — `uv tool install` workflow, quickstart, rate-limit/attribution notes for the image source.
 20. ✅ **[I] Scale and performance** — index rebuild and `load_index` at full catalog size (~10k printings), DB growth, batching.
+
+21. ⬜ **[I] Confirmed-sample feedback loop** — `samples add/list/remove`, user photos stored under their own origin and excluded from matching/eval by default.
 
 Tags: **[D]** data · **[Dsn]** design decision · **[I]** implementation.
