@@ -63,6 +63,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     accept.add_argument("match_id", type=int)
     accept.add_argument("--quantity", type=int, default=1)
+    accept.add_argument("--condition")
+    accept.add_argument("--language")
     reject = matches_commands.add_parser("reject", help="reject a pending match")
     reject.add_argument("match_id", type=int)
 
@@ -77,6 +79,16 @@ def build_parser() -> argparse.ArgumentParser:
     owned_add.add_argument("--paid", type=float, dest="paid_price")
     owned_add.add_argument("--currency")
     owned_add.add_argument("--note")
+    owned_update = owned_commands.add_parser("update", help="edit an owned row")
+    owned_update.add_argument("owned_id", type=int)
+    owned_update.add_argument("--quantity", type=int, default=None)
+    owned_update.add_argument("--condition")
+    owned_update.add_argument("--language")
+    owned_update.add_argument("--paid", type=float, dest="paid_price")
+    owned_update.add_argument("--currency")
+    owned_update.add_argument("--note")
+    owned_remove = owned_commands.add_parser("remove", help="delete an owned row")
+    owned_remove.add_argument("owned_id", type=int)
     owned_list = owned_commands.add_parser("list", help="list the collection with latest prices")
     owned_list.add_argument("--source", default="tcgplayer", choices=["tcgplayer", "cardmarket"])
 
@@ -103,6 +115,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         ("matches", "accept"): _matches_accept,
         ("matches", "reject"): _matches_reject,
         ("owned", "add"): _owned_add,
+        ("owned", "update"): _owned_update,
+        ("owned", "remove"): _owned_remove,
         ("owned", "list"): _owned_list,
         ("eval", None): _evaluate,
     }
@@ -332,7 +346,13 @@ def _matches_accept(args: argparse.Namespace) -> int:
 
     conn = _open_library_with_catalog()
     try:
-        key = accept_match(conn, args.match_id, quantity=args.quantity)
+        key = accept_match(
+            conn,
+            args.match_id,
+            quantity=args.quantity,
+            condition=args.condition,
+            language=args.language,
+        )
         printing = get_printing(conn, *key)
         conn.commit()
     except ValueError as error:
@@ -391,8 +411,51 @@ def _owned_add(args: argparse.Namespace) -> int:
     return 0
 
 
+def _owned_update(args: argparse.Namespace) -> int:
+    from tcg_scanner.db.library import update_owned
+
+    conn = _open_library_with_catalog()
+    try:
+        update_owned(
+            conn,
+            args.owned_id,
+            quantity=args.quantity,
+            condition=args.condition,
+            language=args.language,
+            paid_price=args.paid_price,
+            currency=args.currency,
+            note=args.note,
+        )
+        conn.commit()
+    except ValueError as error:
+        print(error, file=sys.stderr)
+        return 1
+    finally:
+        conn.close()
+
+    print(f"updated owned {args.owned_id}")
+    return 0
+
+
+def _owned_remove(args: argparse.Namespace) -> int:
+    from tcg_scanner.db.library import remove_owned
+
+    conn = _open_library_with_catalog()
+    try:
+        remove_owned(conn, args.owned_id)
+        conn.commit()
+    except ValueError as error:
+        print(error, file=sys.stderr)
+        return 1
+    finally:
+        conn.close()
+
+    print(f"removed owned {args.owned_id}")
+    return 0
+
+
 def _owned_list(args: argparse.Namespace) -> int:
-    from tcg_scanner.db.library import list_owned
+    from tcg_scanner.db.library import collection_total, list_owned
 
     conn = _open_library_with_catalog()
     try:
@@ -412,6 +475,11 @@ def _owned_list(args: argparse.Namespace) -> int:
             f"({row['set_code'] or '?'}, {row['variant_label'] or '?'})  "
             f"x{row['quantity']}  {price}"
         )
+
+    total, unpriced = collection_total(rows)
+    currency = next((row["currency"] for row in rows if row["currency"]), "")
+    suffix = f" ({unpriced} rows without price)" if unpriced else ""
+    print(f"total: {total:.2f} {currency}{suffix}".rstrip())
     return 0
 
 

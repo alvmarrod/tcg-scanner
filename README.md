@@ -74,6 +74,9 @@ uv run tcg-scanner inspect path/to/photo.jpg
 uv run tcg-scanner identify path/to/photo.jpg
 uv run tcg-scanner matches accept 12
 uv run tcg-scanner owned list
+uv run tcg-scanner owned add OP08-001 1
+uv run tcg-scanner owned update 3 --quantity 2
+uv run tcg-scanner owned remove 3
 uv run tcg-scanner eval data/eval/labels.csv
 ```
 
@@ -99,7 +102,11 @@ when it can be read.
 `matches accept <id>` marks a pending match accepted and adds its printing to the
 collection; `matches reject <id>` closes it without touching the collection.
 `owned list` shows the collection with the latest catalog prices, and
-`owned add <card_code> <print_index>` adds a card by hand.
+`owned add <card_code> <print_index>` adds a card by hand. Re-adding the same
+printing, condition and language increments the quantity instead of creating a new
+row; `owned update <id>` edits a row and `owned remove <id>` deletes it. `owned list`
+prints the collection total for the chosen price source, ignoring rows whose printing
+no longer resolves.
 
 `eval` scores recognition against a labels CSV with `image,card_code,print_index`
 (paths relative to the CSV; `print_index` is optional). It reports card and printing

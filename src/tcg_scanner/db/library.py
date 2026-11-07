@@ -64,6 +64,8 @@ def accept_match(
     match_id: int,
     *,
     quantity: int = 1,
+    condition: str | None = None,
+    language: str | None = None,
     acquired_at: str | None = None,
 ) -> tuple[str, int]:
     """Mark a pending match accepted and add its printing to the collection."""
@@ -78,6 +80,8 @@ def accept_match(
         print_index=row["print_index"],
         expected_image_url=row["image_url"],
         quantity=quantity,
+        condition=condition,
+        language=language,
         acquired_at=acquired_at,
     )
     return row["card_code"], row["print_index"]
@@ -109,6 +113,23 @@ def add_owned(
         raise ValueError(
             f"printing {card_code} #{print_index} changed in the catalog; re-run identify"
         )
+
+    existing = conn.execute(
+        """
+        SELECT id FROM owned
+        WHERE card_code = ? AND print_index = ? AND condition IS ? AND language IS ?
+        ORDER BY id LIMIT 1
+        """,
+        (card_code, print_index, condition, language),
+    ).fetchone()
+    if existing is not None:
+        # shortcut: merges by printing, condition and language; the paid price of
+        # the first row is kept, not averaged.
+        conn.execute(
+            "UPDATE owned SET quantity = quantity + ? WHERE id = ?",
+            (quantity, existing["id"]),
+        )
+        return int(existing["id"])
 
     cursor = conn.execute(
         """
@@ -182,3 +203,56 @@ def _pending_match(conn: sqlite3.Connection, match_id: int) -> sqlite3.Row:
     if row["status"] != "pending":
         raise ValueError(f"match {match_id} is already {row['status']}")
     return row
+
+
+def update_owned(
+    conn: sqlite3.Connection,
+    owned_id: int,
+    *,
+    quantity: int | None = None,
+    condition: str | None = None,
+    language: str | None = None,
+    paid_price: float | None = None,
+    currency: str | None = None,
+    note: str | None = None,
+) -> None:
+    if quantity is not None and quantity <= 0:
+        raise ValueError("quantity must be positive")
+
+    changes = {
+        "quantity": quantity,
+        "condition": condition,
+        "language": language,
+        "paid_price": paid_price,
+        "currency": currency,
+        "note": note,
+    }
+    updates = {column: value for column, value in changes.items() if value is not None}
+    if not updates:
+        return
+    if conn.execute("SELECT 1 FROM owned WHERE id = ?", (owned_id,)).fetchone() is None:
+        raise ValueError(f"unknown owned row: {owned_id}")
+
+    assignments = ", ".join(f"{column} = ?" for column in updates)
+    conn.execute(
+        f"UPDATE owned SET {assignments} WHERE id = ?",
+        (*updates.values(), owned_id),
+    )
+
+
+def remove_owned(conn: sqlite3.Connection, owned_id: int) -> None:
+    cursor = conn.execute("DELETE FROM owned WHERE id = ?", (owned_id,))
+    if cursor.rowcount == 0:
+        raise ValueError(f"unknown owned row: {owned_id}")
+
+
+def collection_total(rows: list[sqlite3.Row]) -> tuple[float, int]:
+    """Sum price x quantity over rows with a resolved price; count the rest."""
+    total = 0.0
+    unpriced = 0
+    for row in rows:
+        if row["price"] is None:
+            unpriced += 1
+        else:
+            total += row["price"] * row["quantity"]
+    return total, unpriced

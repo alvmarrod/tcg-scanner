@@ -6,8 +6,11 @@ from tcg_scanner.db.library import (
     add_match,
     add_owned,
     add_photo,
+    collection_total,
     list_owned,
     reject_match,
+    remove_owned,
+    update_owned,
 )
 
 IMAGE_URL = "http://img/OP08-001_EN.webp"
@@ -199,5 +202,85 @@ def test_owned_list_hides_prices_when_the_printing_changed(tmp_path):
 
         assert row["card_name"] == "Chopper"
         assert row["price"] is None
+    finally:
+        conn.close()
+
+
+def test_add_owned_merges_quantity_for_the_same_condition(tmp_path):
+    conn = _library(tmp_path, _catalog(tmp_path))
+    try:
+        add_owned(conn, card_code="OP08-001", print_index=0, quantity=1, acquired_at="2026-01-02")
+        add_owned(conn, card_code="OP08-001", print_index=0, quantity=2, acquired_at="2026-01-03")
+
+        rows = conn.execute("SELECT * FROM owned").fetchall()
+        assert len(rows) == 1
+        assert rows[0]["quantity"] == 3
+    finally:
+        conn.close()
+
+
+def test_add_owned_keeps_different_conditions_separate(tmp_path):
+    conn = _library(tmp_path, _catalog(tmp_path))
+    try:
+        add_owned(conn, card_code="OP08-001", print_index=0, condition="near-mint")
+        add_owned(conn, card_code="OP08-001", print_index=0, condition="played")
+
+        assert conn.execute("SELECT COUNT(*) FROM owned").fetchone()[0] == 2
+    finally:
+        conn.close()
+
+
+def test_update_and_remove_owned(tmp_path):
+    conn = _library(tmp_path, _catalog(tmp_path))
+    try:
+        owned_id = add_owned(conn, card_code="OP08-001", print_index=0, quantity=1)
+
+        update_owned(conn, owned_id, quantity=4, condition="played", note="binder")
+        row = conn.execute("SELECT * FROM owned WHERE id = ?", (owned_id,)).fetchone()
+        assert row["quantity"] == 4
+        assert row["condition"] == "played"
+        assert row["note"] == "binder"
+
+        remove_owned(conn, owned_id)
+        assert conn.execute("SELECT COUNT(*) FROM owned").fetchone()[0] == 0
+
+        with pytest.raises(ValueError, match="unknown owned row"):
+            remove_owned(conn, owned_id)
+        with pytest.raises(ValueError, match="unknown owned row"):
+            update_owned(conn, 999, quantity=1)
+    finally:
+        conn.close()
+
+
+def test_accept_match_records_condition_and_language(tmp_path):
+    conn = _library(tmp_path, _catalog(tmp_path))
+    try:
+        match_id = _match(conn)
+
+        accept_match(conn, match_id, condition="near-mint", language="en")
+
+        owned = conn.execute("SELECT * FROM owned").fetchone()
+        assert owned["condition"] == "near-mint"
+        assert owned["language"] == "en"
+    finally:
+        conn.close()
+
+
+def test_collection_total_sums_prices_and_counts_unpriced(tmp_path):
+    conn = _library(tmp_path, _catalog(tmp_path))
+    try:
+        add_owned(conn, card_code="OP08-001", print_index=0, quantity=2)
+
+        total, unpriced = collection_total(list_owned(conn))
+        assert total == 3.0
+        assert unpriced == 0
+
+        conn.execute(
+            "UPDATE catalog.printings SET image_url = 'http://img/renumbered.webp' "
+            "WHERE card_code = 'OP08-001' AND print_index = 0"
+        )
+        total, unpriced = collection_total(list_owned(conn))
+        assert total == 0.0
+        assert unpriced == 1
     finally:
         conn.close()
