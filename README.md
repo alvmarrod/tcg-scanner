@@ -59,6 +59,9 @@ code, so the print ordinal is what tells them apart. User rows also keep a snaps
 the printing; catalog data is only trusted while the snapshot still matches, so a
 rebuild that renumbers prints cannot silently repoint a card.
 
+Schema versions live in `PRAGMA user_version`. The SQL files are the frozen version-1
+baseline; later changes are ordered migrations in `db/conn.py` and run on open.
+
 ## Usage
 
 ```sh
