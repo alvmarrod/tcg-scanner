@@ -29,7 +29,14 @@ class Candidate:
     variant_label: str
     image_url: str | None
     score: float
+    reference_language: str
     patch_score: float | None = None
+
+
+@dataclass(frozen=True)
+class SearchResult:
+    candidates: list[Candidate]
+    code_used: bool
 
 
 def rank(
@@ -37,9 +44,14 @@ def rank(
     query: np.ndarray,
     *,
     code: str | None = None,
+    preferred_language: str = "jp",
     top_k: int = 5,
-) -> list[tuple[PrintingKey, float]]:
-    """Rank printings by their best matching reference vector."""
+) -> list[tuple[PrintingKey, float, str]]:
+    """Rank printings, preferring the requested reference language.
+
+    A printing with a reference in the preferred language is always scored on
+    that language; only printings without one fall back to the other language.
+    """
     if len(index) == 0:
         return []
 
@@ -50,15 +62,29 @@ def rank(
             return []
         scores = np.where(mask, scores, -np.inf)
 
-    # A printing can have several reference images; keep its best score.
     key_ids, inverse = np.unique(index.key_ids, return_inverse=True)
-    best = np.full(len(key_ids), -np.inf, dtype=np.float32)
-    np.maximum.at(best, inverse, scores)
+    preferred = np.array(
+        [language == preferred_language for language in index.languages], dtype=bool
+    )
+    best_preferred = np.full(len(key_ids), -np.inf, dtype=np.float32)
+    best_other = np.full(len(key_ids), -np.inf, dtype=np.float32)
+    np.maximum.at(best_preferred, inverse[preferred], scores[preferred])
+    np.maximum.at(best_other, inverse[~preferred], scores[~preferred])
 
-    keep = np.isfinite(best)
-    key_ids, best = key_ids[keep], best[keep]
-    order = np.argsort(-best)[:top_k]
-    return [(index.keys[int(key_ids[i])], float(best[i])) for i in order]
+    use_preferred = np.isfinite(best_preferred)
+    chosen = np.where(use_preferred, best_preferred, best_other)
+    keep = np.isfinite(chosen)
+    key_ids, chosen, use_preferred = key_ids[keep], chosen[keep], use_preferred[keep]
+    order = np.argsort(-chosen)[:top_k]
+    fallback_language = "en" if preferred_language == "jp" else "jp"
+    return [
+        (
+            index.keys[int(key_ids[i])],
+            float(chosen[i]),
+            preferred_language if use_preferred[i] else fallback_language,
+        )
+        for i in order
+    ]
 
 
 def identify(
@@ -67,17 +93,26 @@ def identify(
     query: np.ndarray,
     *,
     code: str | None = None,
+    preferred_language: str = "jp",
     top_k: int = 5,
-) -> list[Candidate]:
-    ranked = rank(index, query, code=code, top_k=top_k)
+) -> SearchResult:
+    ranked = rank(
+        index,
+        query,
+        code=code,
+        preferred_language=preferred_language,
+        top_k=top_k,
+    )
+    code_used = code is not None
     if not ranked and code is not None:
         # A misread code must not turn a good image match into "no match".
-        ranked = rank(index, query, code=None, top_k=top_k)
+        ranked = rank(index, query, preferred_language=preferred_language, top_k=top_k)
+        code_used = False
     if not ranked:
-        return []
+        return SearchResult(candidates=[], code_used=code_used)
 
     condition = " OR ".join("(printing.card_code = ? AND printing.print_index = ?)" for _ in ranked)
-    params = [value for key, _score in ranked for value in key]
+    params = [value for key, _score, _language in ranked for value in key]
     rows = conn.execute(
         f"""
         SELECT printing.card_code, printing.print_index, printing.set_code,
@@ -90,18 +125,22 @@ def identify(
     ).fetchall()
     details = {(row["card_code"], row["print_index"]): row for row in rows}
 
-    return [
-        Candidate(
-            card_code=key[0],
-            print_index=key[1],
-            card_name=details[key]["card_name"],
-            set_code=details[key]["set_code"],
-            variant_label=details[key]["variant_label"],
-            image_url=details[key]["image_url"],
-            score=score,
-        )
-        for key, score in ranked
-    ]
+    return SearchResult(
+        candidates=[
+            Candidate(
+                card_code=key[0],
+                print_index=key[1],
+                card_name=details[key]["card_name"],
+                set_code=details[key]["set_code"],
+                variant_label=details[key]["variant_label"],
+                image_url=details[key]["image_url"],
+                score=score,
+                reference_language=language,
+            )
+            for key, score, language in ranked
+        ],
+        code_used=code_used,
+    )
 
 
 def verify(
@@ -121,12 +160,20 @@ def verify(
     group, rest = list(candidates[:size]), list(candidates[size:])
 
     scores = _patch_scores(conn, group, query_patches, model_name)
-    if any((candidate.card_code, candidate.print_index) not in scores for candidate in group):
+    if any(
+        (candidate.card_code, candidate.print_index, candidate.reference_language) not in scores
+        for candidate in group
+    ):
         # Incomplete patch index: do not favor candidates that happen to have one.
         return candidates
 
     verified = [
-        replace(candidate, patch_score=scores[(candidate.card_code, candidate.print_index)])
+        replace(
+            candidate,
+            patch_score=scores[
+                (candidate.card_code, candidate.print_index, candidate.reference_language)
+            ],
+        )
         for candidate in group
     ]
     verified.sort(
@@ -144,7 +191,7 @@ def _patch_scores(
     group: list[Candidate],
     query_patches: np.ndarray,
     model_name: str,
-) -> dict[PrintingKey, float]:
+) -> dict[tuple[str, int, str], float]:
     condition = " OR ".join("(image.card_code = ? AND image.print_index = ?)" for _ in group)
     params: list[object] = [model_name, KIND_PATCH]
     params.extend(
@@ -152,7 +199,8 @@ def _patch_scores(
     )
     rows = conn.execute(
         f"""
-        SELECT image.card_code, image.print_index, embedding.vector, embedding.dim
+        SELECT image.card_code, image.print_index, image.language,
+               embedding.vector, embedding.dim
         FROM embeddings AS embedding
         JOIN card_images AS image ON image.id = embedding.card_image_id
         WHERE embedding.model = ? AND embedding.kind = ? AND ({condition})
@@ -163,11 +211,11 @@ def _patch_scores(
     query = np.asarray(query_patches, dtype=np.float32)
     query /= np.maximum(np.linalg.norm(query, axis=1, keepdims=True), 1e-6)
 
-    best: dict[PrintingKey, float] = {}
+    best: dict[tuple[str, int, str], float] = {}
     for row in rows:
         reference = from_patch_blob(row["vector"], row["dim"]).astype(np.float32)
         reference /= np.maximum(np.linalg.norm(reference, axis=1, keepdims=True), 1e-6)
         score = float(np.mean(np.sum(query * reference, axis=1)))
-        key = (row["card_code"], row["print_index"])
+        key = (row["card_code"], row["print_index"], row["language"])
         best[key] = max(best.get(key, -1.0), score)
     return best

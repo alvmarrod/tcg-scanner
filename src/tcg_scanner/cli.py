@@ -42,6 +42,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="reference image language (default: jp)",
     )
     sync.add_argument("--no-images", action="store_true", help="skip downloading card images")
+    sync.add_argument(
+        "--skip-missing",
+        action="store_true",
+        help="do not retry assets previously recorded as missing",
+    )
 
     prices = commands.add_parser("prices", help="refresh price history")
     price_commands = prices.add_subparsers(dest="prices_command", required=True)
@@ -67,6 +72,12 @@ def build_parser() -> argparse.ArgumentParser:
     identify = commands.add_parser("identify", help="match a photo against the reference index")
     identify.add_argument("image", type=Path, metavar="IMAGE")
     identify.add_argument("--top", type=int, default=5, metavar="N")
+    identify.add_argument(
+        "--text", action="store_true", help="human-readable output instead of JSON"
+    )
+    identify.add_argument(
+        "--prefer", choices=["jp", "en"], default="jp", help="preferred reference language"
+    )
 
     matches = commands.add_parser("matches", help="accept or reject recorded matches")
     matches_commands = matches.add_subparsers(dest="matches_command", required=True)
@@ -166,6 +177,10 @@ def _db_check(args: argparse.Namespace) -> int:
         f"{len(result.unreferenced_files)} unreferenced"
     )
     print(f"index: {result.unindexed_images} images missing vectors ({MODEL_NAME})")
+    print(
+        f"coverage: {result.jp_missing} printings without JP art, "
+        f"{result.image_misses} recorded misses"
+    )
 
     for label, ids in (
         ("unresolved owned", result.unresolved_owned),
@@ -190,6 +205,7 @@ def _catalog_sync(args: argparse.Namespace) -> int:
         with Fetcher() as fetcher:
             common = {
                 "language": args.lang,
+                "skip_missing": args.skip_missing,
                 "with_images": not args.no_images,
                 "on_progress": _progress(f"{args.lang} images"),
             }
@@ -206,16 +222,19 @@ def _catalog_sync(args: argparse.Namespace) -> int:
         conn.close()
 
     for result in results:
+        fallbacks = f", {result.fallbacks} art fallbacks" if result.fallbacks else ""
         print(
             f"{result.set_code}: {result.cards} cards, {result.printings} printings, "
-            f"{result.prices} price points, {result.images} images"
+            f"{result.prices} price points, {result.images} images{fallbacks}"
         )
     if len(results) > 1:
+        fallbacks = sum(result.fallbacks for result in results)
+        suffix = f", {fallbacks} art fallbacks" if fallbacks else ""
         print(
             f"total: {sum(result.cards for result in results)} cards, "
             f"{sum(result.printings for result in results)} printings, "
             f"{sum(result.prices for result in results)} price points, "
-            f"{sum(result.images for result in results)} images"
+            f"{sum(result.images for result in results)} images{suffix}"
         )
     return 0
 
@@ -298,11 +317,11 @@ def _inspect(args: argparse.Namespace) -> int:
     rectified = rectify_file(args.image)
     output = config.output_dir() / f"{args.image.stem}-rectified.jpg"
     write_image(output, rectified.image)
-    code = CodeReader().read(rectified.image)
+    reading = CodeReader().read(rectified.image)
 
     print(f"card edge: {'found' if rectified.found else 'not found'}")
     print(f"rectified: {output}")
-    print(f"code: {code or 'unreadable'}")
+    print(f"code: {reading.code or 'unreadable'}")
     return 0
 
 
@@ -322,6 +341,7 @@ def _snapshot(candidate) -> dict[str, object]:
 def _identify(args: argparse.Namespace) -> int:
     _require_recognition("easyocr", "timm")
 
+    import json
     from datetime import UTC, datetime
 
     from tcg_scanner.db import open_library
@@ -332,19 +352,27 @@ def _identify(args: argparse.Namespace) -> int:
     from tcg_scanner.recognition.index import load_index
     from tcg_scanner.recognition.match import identify, verify
     from tcg_scanner.recognition.ocr import CodeReader
+    from tcg_scanner.recognition.report import build_report
 
     init_catalog(config.catalog_db())
     rectified = rectify_file(args.image)
-    code = CodeReader().read(rectified.image)
+    reading = CodeReader().read(rectified.image)
     embedder = Embedder()
     query, patches = embedder.embed_bgr(rectified.image)
-    query = query[0]
 
     conn = open_catalog(config.catalog_db())
     try:
         index = load_index(conn, embedder.model_name)
-        candidates = identify(conn, index, query, code=code, top_k=args.top)
-        candidates = verify(conn, candidates, patches[0], embedder.model_name)
+        search = identify(
+            conn,
+            index,
+            query[0],
+            code=reading.code,
+            preferred_language=args.prefer,
+            top_k=args.top,
+        )
+        candidates = verify(conn, search.candidates, patches[0], embedder.model_name)
+        prices = _latest_prices(conn, candidates[0]) if candidates else _no_prices()
     finally:
         conn.close()
 
@@ -357,7 +385,7 @@ def _identify(args: argparse.Namespace) -> int:
             library,
             photo_id=photo_id,
             confidence=top.score if top else None,
-            method="ocr+dinov2" if code else "dinov2",
+            method="ocr+dinov2" if search.code_used else "dinov2",
             created_at=datetime.now(UTC).isoformat(timespec="seconds"),
             **_snapshot(top),
         )
@@ -365,13 +393,29 @@ def _identify(args: argparse.Namespace) -> int:
     finally:
         library.close()
 
+    report = build_report(
+        image=args.image,
+        rectified=rectified,
+        reading=reading,
+        search=search,
+        candidates=candidates,
+        prices=prices,
+        match_id=match_id,
+        preferred_language=args.prefer,
+    )
+
+    if not args.text:
+        print(json.dumps(report, indent=2))
+        return 0
+
     print(f"card edge: {'found' if rectified.found else 'not found'}")
-    print(f"code: {code or 'unreadable'}")
+    print(f"code: {reading.code or 'unreadable'}")
     for position, candidate in enumerate(candidates, start=1):
         patch = f"  patch {candidate.patch_score:.3f}" if candidate.patch_score is not None else ""
         print(
             f"{position:>2}. {candidate.score:.3f}{patch}  {candidate.card_code}  "
-            f"{candidate.card_name}  ({candidate.set_code}, {candidate.variant_label})"
+            f"{candidate.card_name}  ({candidate.set_code}, {candidate.variant_label})  "
+            f"[{candidate.reference_language}]"
         )
     if not candidates:
         print("no match")
@@ -379,8 +423,33 @@ def _identify(args: argparse.Namespace) -> int:
             print("index is empty: run `tcg-scanner index build`")
     elif len(candidates) > 1:
         print(f"margin: {candidates[0].score - candidates[1].score:.3f}")
+    if report["warnings"]:
+        print("warnings:")
+        for warning in report["warnings"]:
+            print(f"  {warning['code']}: {warning['message']}")
     print(f"match {match_id} (pending)")
     return 0
+
+
+def _no_prices() -> dict[str, object]:
+    return {"eur": None, "usd": None, "currency": None}
+
+
+def _latest_prices(conn, candidate) -> dict[str, object]:
+    rows = conn.execute(
+        "SELECT source, currency, amount FROM latest_prices "
+        "WHERE card_code = ? AND print_index = ?",
+        (candidate.card_code, candidate.print_index),
+    ).fetchall()
+    by_source = {row["source"]: (row["amount"], row["currency"]) for row in rows}
+    eur = by_source.get("cardmarket")
+    usd = by_source.get("tcgplayer")
+    currency = eur[1] if eur is not None else (usd[1] if usd is not None else None)
+    return {
+        "eur": eur[0] if eur is not None else None,
+        "usd": usd[0] if usd is not None else None,
+        "currency": currency,
+    }
 
 
 def _open_library_with_catalog():
@@ -569,10 +638,11 @@ def _evaluate(args: argparse.Namespace) -> int:
 
         def predict(image):
             rectified = rectify_file(image)
-            code = reader.read(rectified.image)
+            reading = reader.read(rectified.image)
             query, patches = embedder.embed_bgr(rectified.image)
-            candidates = identify(conn, index, query[0], code=code, top_k=args.top)
-            return code, verify(conn, candidates, patches[0], embedder.model_name)
+            search = identify(conn, index, query[0], code=reading.code, top_k=args.top)
+            candidates = verify(conn, search.candidates, patches[0], embedder.model_name)
+            return reading.code, candidates
 
         report = evaluate(labels, predict, top_k=args.top)
     finally:

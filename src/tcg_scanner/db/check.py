@@ -15,6 +15,8 @@ class CheckResult:
     missing_files: tuple[str, ...]
     unreferenced_files: tuple[str, ...]
     unindexed_images: int
+    image_misses: int
+    jp_missing: int
 
     @property
     def ok(self) -> bool:
@@ -98,6 +100,19 @@ def check(conn: sqlite3.Connection, data_root: Path, model_name: str) -> CheckRe
         (model_name, model_name),
     ).fetchone()[0]
 
+    image_misses = conn.execute("SELECT COUNT(*) FROM image_misses").fetchone()[0]
+    jp_missing = conn.execute(
+        """
+        SELECT COUNT(*) FROM printings AS printing
+        WHERE NOT EXISTS (
+            SELECT 1 FROM card_images AS image
+            WHERE image.card_code = printing.card_code
+              AND image.print_index = printing.print_index
+              AND image.language = 'jp'
+        )
+        """
+    ).fetchone()[0]
+
     return CheckResult(
         owned_total=conn.execute("SELECT COUNT(*) FROM owned").fetchone()[0],
         unresolved_owned=unresolved_owned,
@@ -109,4 +124,6 @@ def check(conn: sqlite3.Connection, data_root: Path, model_name: str) -> CheckRe
         missing_files=missing_files,
         unreferenced_files=unreferenced_files,
         unindexed_images=unindexed,
+        image_misses=image_misses,
+        jp_missing=jp_missing,
     )

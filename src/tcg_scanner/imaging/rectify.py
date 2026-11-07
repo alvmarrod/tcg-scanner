@@ -15,6 +15,8 @@ CARD_HEIGHT = 838
 class Rectified:
     image: np.ndarray
     found: bool
+    corners: np.ndarray | None = None
+    source_size: tuple[int, int] = (0, 0)
 
 
 def rectify_file(path: Path) -> Rectified:
@@ -26,9 +28,10 @@ def rectify_file(path: Path) -> Rectified:
 
 
 def rectify(image: np.ndarray) -> Rectified:
+    source_size = (image.shape[1], image.shape[0])
     corners = _find_card(image)
     if corners is None:
-        return Rectified(image=image, found=False)
+        return Rectified(image=image, found=False, source_size=source_size)
 
     destination = np.array(
         [[0, 0], [CARD_WIDTH - 1, 0], [CARD_WIDTH - 1, CARD_HEIGHT - 1], [0, CARD_HEIGHT - 1]],
@@ -36,7 +39,12 @@ def rectify(image: np.ndarray) -> Rectified:
     )
     matrix = cv2.getPerspectiveTransform(corners, destination)
     warped = cv2.warpPerspective(image, matrix, (CARD_WIDTH, CARD_HEIGHT))
-    return Rectified(image=_normalize(warped), found=True)
+    return Rectified(
+        image=_normalize(warped),
+        found=True,
+        corners=corners,
+        source_size=source_size,
+    )
 
 
 def write_image(path: Path, image: np.ndarray) -> None:

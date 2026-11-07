@@ -166,3 +166,44 @@ def add_card_image(
         """,
         (card_code, print_index, language, path, sha256, width, height),
     )
+
+
+def has_image_miss(
+    conn: sqlite3.Connection, card_code: str, print_index: int, language: str
+) -> bool:
+    row = conn.execute(
+        """
+        SELECT 1 FROM image_misses
+        WHERE card_code = ? AND print_index = ? AND language = ?
+        """,
+        (card_code, print_index, language),
+    ).fetchone()
+    return row is not None
+
+
+def record_image_miss(
+    conn: sqlite3.Connection,
+    *,
+    card_code: str,
+    print_index: int,
+    language: str,
+    checked_at: str,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO image_misses (card_code, print_index, language, checked_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT (card_code, print_index, language) DO UPDATE SET
+            checked_at = excluded.checked_at
+        """,
+        (card_code, print_index, language, checked_at),
+    )
+
+
+def clear_image_miss(
+    conn: sqlite3.Connection, card_code: str, print_index: int, language: str
+) -> None:
+    conn.execute(
+        "DELETE FROM image_misses WHERE card_code = ? AND print_index = ? AND language = ?",
+        (card_code, print_index, language),
+    )

@@ -15,6 +15,7 @@ def _candidate(code: str, print_index: int, score: float) -> Candidate:
         variant_label="base",
         image_url=None,
         score=score,
+        reference_language="jp",
     )
 
 

@@ -55,7 +55,7 @@ def test_reader_prefers_the_bottom_band_over_confident_noise():
         (_box(970, 990, 400, 550), "OP15-001", 0.55),
     ]
 
-    assert _reader_with(results).read(image) == "OP15-001"
+    assert _reader_with(results).read(image).code == "OP15-001"
 
 
 def test_reader_joins_a_split_code():
@@ -65,11 +65,11 @@ def test_reader_joins_a_split_code():
         (_box(970, 990, 310, 380), "001", 0.9),
     ]
 
-    assert _reader_with(results).read(image) == "OP08-001"
+    assert _reader_with(results).read(image).code == "OP08-001"
 
 
 def test_reader_falls_back_to_all_detections():
     image = np.zeros((1000, 600, 3), dtype=np.uint8)
     results = [(_box(500, 540), "OP08-001", 0.9)]
 
-    assert _reader_with(results).read(image) == "OP08-001"
+    assert _reader_with(results).read(image).code == "OP08-001"

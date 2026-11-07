@@ -129,16 +129,16 @@ def test_applies_pending_migrations(tmp_path, monkeypatch):
     init_catalog(path)
     monkeypatch.setitem(
         conn_module.MIGRATIONS["catalog"],
-        3,
+        4,
         "ALTER TABLE sets ADD COLUMN extra TEXT;",
     )
-    monkeypatch.setitem(conn_module.SCHEMA_VERSIONS, "catalog", 3)
+    monkeypatch.setitem(conn_module.SCHEMA_VERSIONS, "catalog", 4)
 
     init_catalog(path)
 
     conn = open_catalog(path)
     try:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(sets)")}
         assert "extra" in columns
     finally:
@@ -173,8 +173,44 @@ def test_v1_catalog_backfills_image_language(tmp_path):
 
     conn = open_catalog(path)
     try:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
         languages = dict(conn.execute("SELECT print_index, language FROM card_images").fetchall())
         assert languages == {0: "en", 1: "jp"}
+    finally:
+        conn.close()
+
+
+def test_v2_migration_moves_duplicate_english_art_to_a_miss(tmp_path):
+    from tcg_scanner.db import conn as conn_module
+
+    path = tmp_path / "catalog.db"
+    conn = conn_module.connect(path)
+    schema = (Path(conn_module.__file__).parent / "schema_catalog.sql").read_text()
+    conn.executescript(schema)
+    conn.executescript(conn_module.MIGRATIONS["catalog"][2])
+    conn.execute("PRAGMA user_version = 2")
+    conn.execute("INSERT INTO sets (code, name, kind) VALUES ('OP15', 'Kamis', 'booster')")
+    conn.execute("INSERT INTO cards (code, name, set_code) VALUES ('OP15-002', 'Lucy', 'OP15')")
+    conn.execute(
+        "INSERT INTO printings (card_code, print_index, set_code, image_url) "
+        "VALUES ('OP15-002', 2, 'OP15', 'https://cdn/OP15/OP15-002_p2_EN.webp')"
+    )
+    for language in ("en", "jp"):
+        conn.execute(
+            "INSERT INTO card_images (card_code, print_index, language, path, sha256) "
+            "VALUES ('OP15-002', 2, ?, 'images/shared.webp', 'sha')",
+            (language,),
+        )
+    conn.commit()
+    conn.close()
+
+    init_catalog(path)
+
+    conn = open_catalog(path)
+    try:
+        rows = conn.execute("SELECT language FROM card_images").fetchall()
+        assert [row[0] for row in rows] == ["en"]
+        misses = conn.execute("SELECT language FROM image_misses").fetchall()
+        assert [row[0] for row in misses] == ["jp"]
     finally:
         conn.close()

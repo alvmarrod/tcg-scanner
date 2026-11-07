@@ -55,6 +55,7 @@ def _candidate(code, score):
         variant_label="base",
         image_url=None,
         score=score,
+        reference_language="jp",
     )
 
 

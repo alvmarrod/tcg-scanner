@@ -36,6 +36,7 @@ class SyncResult:
     printings: int
     prices: int
     images: int
+    fallbacks: int = 0
 
 
 @dataclass(frozen=True)
@@ -51,6 +52,22 @@ class _Counts:
     printings: int = 0
     prices: int = 0
     images: int = 0
+    fallbacks: int = 0
+
+
+@dataclass(frozen=True)
+class _ImageJob:
+    key: PrintingKey
+    language: str
+    url: str
+    fallback_language: str
+    fallback_url: str
+    fallback_present: bool
+    owner: str
+
+
+def other_language(language: str) -> str:
+    return "en" if language == "jp" else "jp"
 
 
 def sync_set(
@@ -60,6 +77,7 @@ def sync_set(
     data_root: Path,
     *,
     language: str = "jp",
+    skip_missing: bool = False,
     with_images: bool = True,
     now: str | None = None,
     workers: int = 4,
@@ -71,6 +89,7 @@ def sync_set(
         fetcher,
         data_root,
         language=language,
+        skip_missing=skip_missing,
         with_images=with_images,
         now=now,
         workers=workers,
@@ -85,6 +104,7 @@ def sync_sets(
     data_root: Path,
     *,
     language: str = "jp",
+    skip_missing: bool = False,
     with_images: bool = True,
     now: str | None = None,
     workers: int = 4,
@@ -108,6 +128,7 @@ def sync_sets(
         fetcher,
         data_root,
         language=language,
+        skip_missing=skip_missing,
         with_images=with_images,
         now=now,
         workers=workers,
@@ -121,6 +142,7 @@ def sync_all(
     data_root: Path,
     *,
     language: str = "jp",
+    skip_missing: bool = False,
     with_images: bool = True,
     now: str | None = None,
     workers: int = 4,
@@ -135,6 +157,36 @@ def sync_all(
         fetcher,
         data_root,
         language=language,
+        skip_missing=skip_missing,
+        with_images=with_images,
+        now=now,
+        workers=workers,
+        on_progress=on_progress,
+    )
+
+
+def sync_promos(
+    conn: sqlite3.Connection,
+    fetcher: Fetcher,
+    data_root: Path,
+    *,
+    language: str = "jp",
+    skip_missing: bool = False,
+    with_images: bool = True,
+    now: str | None = None,
+    workers: int = 4,
+    on_progress: Progress | None = None,
+) -> list[SyncResult]:
+    entries = parse_index(fetcher.text("/cards"))
+    promos = parse_promos(fetcher.text("/cards/promos"))
+    return _sync_entries(
+        conn,
+        promos,
+        entries + promos,
+        fetcher,
+        data_root,
+        language=language,
+        skip_missing=skip_missing,
         with_images=with_images,
         now=now,
         workers=workers,
@@ -150,6 +202,7 @@ def _sync_entries(
     data_root: Path,
     *,
     language: str,
+    skip_missing: bool,
     with_images: bool,
     now: str | None,
     workers: int,
@@ -166,10 +219,9 @@ def _sync_entries(
 
     by_name = {entry.name: entry.code for entry in entries}
     known_codes = set(by_name.values())
-    fetched_at = now or datetime.now(UTC).isoformat(timespec="seconds")
+    checked_at = now or datetime.now(UTC).isoformat(timespec="seconds")
     counts = {entry.code: _Counts() for entry in targets}
-    jobs: dict[PrintingKey, str] = {}
-    owners: dict[PrintingKey, str] = {}
+    jobs: dict[tuple[PrintingKey, str], _ImageJob] = {}
 
     for entry in targets:
         cards = parse_cards(fetcher.text(f"/cards/{entry.slug}?display=full"))
@@ -184,9 +236,8 @@ def _sync_entries(
             base_image = base_image_url(card.image_url)
             for printing in card.printings:
                 printing_set = _set_for_name(conn, printing.set_name, by_name)
-                image_url = language_image_url(
-                    variant_image_url(base_image, printing.print_index), language
-                )
+                base_url = variant_image_url(base_image, printing.print_index)
+                image_url = language_image_url(base_url, language)
                 printing_key = catalog.upsert_printing(
                     conn,
                     card_code=card.code,
@@ -210,29 +261,34 @@ def _sync_entries(
                         source=source,
                         currency=currency,
                         amount=amount,
-                        fetched_at=fetched_at,
+                        fetched_at=checked_at,
                     ):
                         counts[entry.code].prices += 1
 
-                if (
-                    with_images
-                    and printing_key not in jobs
-                    and not catalog.has_reference_image(conn, *printing_key, language)
-                ):
-                    jobs[printing_key] = image_url
-                    owners[printing_key] = entry.code
+                if with_images:
+                    job = _plan_image(
+                        conn,
+                        printing_key,
+                        base_url,
+                        language,
+                        entry.code,
+                        skip_missing=skip_missing,
+                    )
+                    if job is not None:
+                        jobs[(job.key, job.language)] = job
 
     conn.commit()
-    for key in _download_images(
+    stored_owners, fallbacks = _download_images(
         conn,
         fetcher,
         data_root,
-        list(jobs.items()),
-        language=language,
+        list(jobs.values()),
+        checked_at=checked_at,
         workers=workers,
         on_progress=on_progress,
-    ):
-        counts[owners[key]].images += 1
+    )
+    for owner in stored_owners:
+        counts[owner].images += 1
     conn.commit()
 
     return [
@@ -242,35 +298,40 @@ def _sync_entries(
             printings=counts[entry.code].printings,
             prices=counts[entry.code].prices,
             images=counts[entry.code].images,
+            fallbacks=fallbacks.get(entry.code, 0),
         )
         for entry in targets
     ]
 
 
-def sync_promos(
+def _plan_image(
     conn: sqlite3.Connection,
-    fetcher: Fetcher,
-    data_root: Path,
+    printing_key: PrintingKey,
+    base_url: str,
+    language: str,
+    owner: str,
     *,
-    language: str = "jp",
-    with_images: bool = True,
-    now: str | None = None,
-    workers: int = 4,
-    on_progress: Progress | None = None,
-) -> list[SyncResult]:
-    entries = parse_index(fetcher.text("/cards"))
-    promos = parse_promos(fetcher.text("/cards/promos"))
-    return _sync_entries(
-        conn,
-        promos,
-        entries + promos,
-        fetcher,
-        data_root,
+    skip_missing: bool,
+) -> _ImageJob | None:
+    other = other_language(language)
+    if catalog.has_reference_image(conn, *printing_key, language):
+        return None
+
+    missing_known = catalog.has_image_miss(conn, *printing_key, language)
+    if skip_missing and missing_known:
+        if catalog.has_reference_image(conn, *printing_key, other):
+            return None
+        # No asset either way yet: spend the request on the fallback language.
+        language, other = other, language
+
+    return _ImageJob(
+        key=printing_key,
         language=language,
-        with_images=with_images,
-        now=now,
-        workers=workers,
-        on_progress=on_progress,
+        url=language_image_url(base_url, language),
+        fallback_language=other,
+        fallback_url=language_image_url(base_url, other),
+        fallback_present=catalog.has_reference_image(conn, *printing_key, other),
+        owner=owner,
     )
 
 
@@ -342,61 +403,83 @@ def _set_for_name(conn: sqlite3.Connection, name: str, by_name: dict[str, str]) 
     return code
 
 
-def _fetch_image(fetcher: Fetcher, url: str, language: str) -> tuple[bytes, str]:
-    """Fetch a reference image, falling back to the other language if needed.
-
-    Some reprinted arts exist only in one language, and its URL 403s otherwise.
-    """
+def _fetch_reference(fetcher: Fetcher, job: _ImageJob) -> tuple[bytes | None, str | None]:
     try:
-        return fetcher.content(url), url
-    except httpx.HTTPStatusError:
-        fallback = language_image_url(url, "en" if language == "jp" else "jp")
-        return fetcher.content(fallback), fallback
+        return fetcher.content(job.url), None
+    except httpx.HTTPStatusError as error:
+        if error.response.status_code not in (403, 404):
+            raise
+        if job.fallback_present:
+            return None, job.language
+        return fetcher.content(job.fallback_url), job.language
 
 
 def _download_images(
     conn: sqlite3.Connection,
     fetcher: Fetcher,
     data_root: Path,
-    jobs: list[tuple[PrintingKey, str]],
+    jobs: list[_ImageJob],
     *,
-    language: str,
+    checked_at: str,
     workers: int,
     on_progress: Progress | None,
-) -> list[PrintingKey]:
+) -> tuple[list[str], dict[str, int]]:
     if not jobs:
-        return []
+        return [], {}
 
-    downloaded: list[PrintingKey] = []
+    stored_owners: list[str] = []
+    fallbacks: dict[str, int] = {}
+    processed = 0
     with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
-        futures = {
-            pool.submit(_fetch_image, fetcher, url, language): (key, url) for key, url in jobs
-        }
+        futures = {pool.submit(_fetch_reference, fetcher, job): job for job in jobs}
         for future in as_completed(futures):
-            printing_key, url = futures[future]
+            job = futures[future]
             try:
-                data, actual_url = future.result()
+                data, missing_language = future.result()
             except httpx.HTTPStatusError as error:
-                print(f"warning: {url}: HTTP {error.response.status_code}", file=sys.stderr)
+                print(f"warning: {job.url}: HTTP {error.response.status_code}", file=sys.stderr)
                 continue
             except httpx.HTTPError as error:
-                print(f"warning: {url}: {type(error).__name__}", file=sys.stderr)
+                print(f"warning: {job.url}: {type(error).__name__}", file=sys.stderr)
                 continue
 
-            # Tag with the requested language even when the other language's asset
-            # was used, so the next sync does not retry the missing one forever.
-            path, digest = store_image(
-                data, data_root, Path(urlsplit(actual_url).path).suffix or ".webp"
-            )
-            catalog.add_card_image(
-                conn,
-                card_code=printing_key[0],
-                print_index=printing_key[1],
-                language=language,
-                path=path.relative_to(data_root).as_posix(),
-                sha256=digest,
-            )
-            downloaded.append(printing_key)
+            processed += 1
+            if missing_language is not None:
+                catalog.record_image_miss(
+                    conn,
+                    card_code=job.key[0],
+                    print_index=job.key[1],
+                    language=missing_language,
+                    checked_at=checked_at,
+                )
+                stored_language = job.fallback_language
+                if stored_language != job.language:
+                    fallbacks[job.owner] = fallbacks.get(job.owner, 0) + 1
+                    print(
+                        f"warning: {job.key[0]} #{job.key[1]}: no {missing_language} art, "
+                        f"using {stored_language}",
+                        file=sys.stderr,
+                    )
+            else:
+                stored_language = job.language
+                catalog.clear_image_miss(conn, *job.key, stored_language)
+
+            if data is not None and not catalog.has_reference_image(
+                conn, *job.key, stored_language
+            ):
+                path, digest = store_image(
+                    data, data_root, Path(urlsplit(job.url).path).suffix or ".webp"
+                )
+                catalog.add_card_image(
+                    conn,
+                    card_code=job.key[0],
+                    print_index=job.key[1],
+                    language=stored_language,
+                    path=path.relative_to(data_root).as_posix(),
+                    sha256=digest,
+                )
+                stored_owners.append(job.owner)
+
             if on_progress is not None:
-                on_progress(len(downloaded), len(jobs))
-    return downloaded
+                on_progress(processed, len(jobs))
+    return stored_owners, fallbacks

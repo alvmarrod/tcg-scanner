@@ -3,7 +3,6 @@ from pathlib import Path
 import httpx
 
 from tcg_scanner.catalog.sync import (
-    _download_images,
     sync_all,
     sync_promos,
     sync_set,
@@ -145,50 +144,76 @@ def test_sync_all_covers_every_booster_and_starter(tmp_path):
         conn.close()
 
 
-def test_download_falls_back_to_the_japanese_image(tmp_path):
-    class JpFetcher:
-        def content(self, url: str) -> bytes:
-            if url.endswith("_EN.webp"):
-                request = httpx.Request("GET", url)
-                response = httpx.Response(403, request=request)
-                raise httpx.HTTPStatusError("forbidden", request=request, response=response)
-            return b"japanese image"
+class FailingJapaneseFetcher(FakeFetcher):
+    def __init__(self, pages: dict[str, str]) -> None:
+        super().__init__(pages)
+        self.downloads = 0
 
+    def content(self, url: str) -> bytes:
+        self.downloads += 1
+        if "_JP.webp" in url:
+            request = httpx.Request("GET", url)
+            response = httpx.Response(403, request=request)
+            raise httpx.HTTPStatusError("forbidden", request=request, response=response)
+        return url.encode()
+
+
+def test_missing_japanese_art_stores_english_and_records_a_miss(tmp_path):
     db_path = tmp_path / "catalog.db"
     init_catalog(db_path)
     conn = open_catalog(db_path)
     try:
-        conn.execute(
-            "INSERT INTO sets (code, name, kind) VALUES ('OP08', 'Two Legends', 'booster')"
-        )
-        conn.execute(
-            "INSERT INTO cards (code, name, set_code) VALUES ('OP08-001', 'Chopper', 'OP08')"
-        )
-        conn.execute(
-            "INSERT INTO printings (card_code, print_index, set_code, variant_label, image_url) "
-            "VALUES ('OP08-001', 1, 'OP08', 'aa', "
-            "'https://cdn.example/OP08/OP08-001_p1_EN.webp')"
-        )
-        key = ("OP08-001", 1)
+        fetcher = FailingJapaneseFetcher(_pages())
 
-        downloaded = _download_images(
+        result = sync_set(conn, "OP08", fetcher, tmp_path, now="2026-01-01T00:00:00Z")
+
+        assert result.images == 4
+        assert result.fallbacks == 4
+        languages = {row[0] for row in conn.execute("SELECT DISTINCT language FROM card_images")}
+        assert languages == {"en"}
+        misses = conn.execute("SELECT language FROM image_misses").fetchall()
+        assert [row[0] for row in misses] == ["jp"] * 4
+    finally:
+        conn.close()
+
+
+def test_refresh_retries_missing_art_by_default(tmp_path):
+    db_path = tmp_path / "catalog.db"
+    init_catalog(db_path)
+    conn = open_catalog(db_path)
+    try:
+        sync_set(
+            conn, "OP08", FailingJapaneseFetcher(_pages()), tmp_path, now="2026-01-01T00:00:00Z"
+        )
+        second = FailingJapaneseFetcher(_pages())
+
+        sync_set(conn, "OP08", second, tmp_path, now="2026-01-02T00:00:00Z")
+
+        assert second.downloads == 4  # the four JP misses were retried
+    finally:
+        conn.close()
+
+
+def test_skip_missing_does_not_retry(tmp_path):
+    db_path = tmp_path / "catalog.db"
+    init_catalog(db_path)
+    conn = open_catalog(db_path)
+    try:
+        sync_set(
+            conn, "OP08", FailingJapaneseFetcher(_pages()), tmp_path, now="2026-01-01T00:00:00Z"
+        )
+        second = FailingJapaneseFetcher(_pages())
+
+        sync_set(
             conn,
-            JpFetcher(),
+            "OP08",
+            second,
             tmp_path,
-            [(key, "https://cdn.example/OP08/OP08-001_p1_EN.webp")],
-            language="en",
-            workers=1,
-            on_progress=None,
+            skip_missing=True,
+            now="2026-01-02T00:00:00Z",
         )
 
-        assert downloaded == [key]
-        image_url = conn.execute(
-            "SELECT image_url FROM printings WHERE card_code = 'OP08-001' AND print_index = 1"
-        ).fetchone()[0]
-        assert image_url.endswith("_p1_EN.webp")
-        row = conn.execute("SELECT language, path FROM card_images").fetchone()
-        assert row["language"] == "en"  # tagged with the requested language
-        assert (tmp_path / row["path"]).is_file()
+        assert second.downloads == 0
     finally:
         conn.close()
 

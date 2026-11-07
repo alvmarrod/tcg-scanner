@@ -77,7 +77,8 @@ uv run tcg-scanner catalog sync --set OP08 --no-images
 uv run tcg-scanner prices refresh
 uv run tcg-scanner index build
 uv run tcg-scanner inspect path/to/photo.jpg
-uv run tcg-scanner identify path/to/photo.jpg
+uv run tcg-scanner identify path/to/photo.jpg          # JSON
+uv run tcg-scanner identify --text path/to/photo.jpg   # human table
 uv run tcg-scanner matches accept 12
 uv run tcg-scanner owned list
 uv run tcg-scanner owned add OP08-001 1
@@ -93,13 +94,15 @@ re-running adds only new price points and missing images. Image downloads use a 
 worker pool while request starts stay throttled.
 
 Reference images default to Japanese (`--lang jp`); pass `--lang en` for English.
-Card names, text and prices always come from the English product data. A print with no
-asset in the requested language falls back to the other one. Promos are not synced
-yet.
+Each stored image is tagged with its real language; when the requested language is
+missing, the other language's asset is stored separately and reported as a fallback.
+Misses are remembered and retried on every sync unless `--skip-missing` is passed.
+Card names, text and prices always come from the English product data.
 
 `db check` reports owned rows and open matches whose printing no longer resolves
-against the catalog, missing or unreferenced image files, and reference images without
-vectors. It exits 1 when anything is off, so it works in cron or CI.
+against the catalog, missing or unreferenced image files, reference images without
+vectors, and Japanese coverage/misses. It exits 1 when anything is off, so it works in
+cron or CI.
 
 `prices refresh` appends only price points that changed, for one `--set` or every
 synced set. It never creates printings, so run `catalog sync` first. There is no
@@ -112,8 +115,11 @@ downloads the DINOv2 weights (~85 MB); it uses CUDA when available.
 and reads the card code. The first run downloads the EasyOCR models (~100 MB).
 
 `identify` rectifies, reads the code, ranks printings against the reference index and
-records the attempt in `library.db` as a pending match. The code is used as a filter
-when it can be read.
+records the attempt in `library.db` as a pending match. It prints JSON by default:
+card corners, OCR code with confidence and box, the matched printing, global and patch
+scores, which reference language was used, prices, and a `warnings` array. `--text`
+prints the simpler table. References are preferred in Japanese (`--prefer en` to
+change); a fallback to English is reported, never silent.
 
 `matches accept <id>` marks a pending match accepted and adds its printing to the
 collection; `matches reject <id>` closes it without touching the collection.

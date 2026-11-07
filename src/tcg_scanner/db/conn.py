@@ -8,7 +8,7 @@ _SCHEMA_DIR = Path(__file__).parent
 # The schema files are version 1 and stay frozen. Later changes are added as
 # migrations keyed by the version they produce; fresh databases run the baseline
 # and then every migration in order.
-SCHEMA_VERSIONS = {"catalog": 2, "library": 1}
+SCHEMA_VERSIONS = {"catalog": 3, "library": 1}
 MIGRATIONS: dict[str, dict[int, str]] = {
     "catalog": {
         2: """
@@ -26,6 +26,41 @@ MIGRATIONS: dict[str, dict[int, str]] = {
 
             CREATE INDEX IF NOT EXISTS idx_card_images_language
                 ON card_images (card_code, print_index, language);
+        """,
+        3: """
+            CREATE TABLE IF NOT EXISTS image_misses (
+                card_code   TEXT NOT NULL,
+                print_index INTEGER NOT NULL,
+                language    TEXT NOT NULL,
+                checked_at  TEXT NOT NULL,
+                PRIMARY KEY (card_code, print_index, language),
+                FOREIGN KEY (card_code, print_index)
+                    REFERENCES printings (card_code, print_index) ON DELETE CASCADE
+            );
+
+            -- Version 2 stored an English file under a 'jp' slot when the Japanese
+            -- asset did not exist. That is a miss, not a Japanese image.
+            INSERT OR REPLACE INTO image_misses (card_code, print_index, language, checked_at)
+            SELECT image.card_code, image.print_index, 'jp', 'migration'
+            FROM card_images AS image
+            WHERE image.language = 'jp'
+              AND EXISTS (
+                  SELECT 1 FROM card_images AS english
+                  WHERE english.card_code = image.card_code
+                    AND english.print_index = image.print_index
+                    AND english.language = 'en'
+                    AND english.path = image.path
+              );
+
+            DELETE FROM card_images
+            WHERE language = 'jp'
+              AND EXISTS (
+                  SELECT 1 FROM card_images AS english
+                  WHERE english.card_code = card_images.card_code
+                    AND english.print_index = card_images.print_index
+                    AND english.language = 'en'
+                    AND english.path = card_images.path
+              );
         """,
     },
     "library": {},

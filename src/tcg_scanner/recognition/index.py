@@ -27,6 +27,7 @@ class ReferenceIndex:
     key_ids: np.ndarray
     keys: list[tuple[str, int]]
     card_codes: list[str]
+    languages: list[str]
 
     def __len__(self) -> int:
         return len(self.key_ids)
@@ -36,7 +37,7 @@ def load_index(conn: sqlite3.Connection, model_name: str) -> ReferenceIndex:
     rows = conn.execute(
         """
         SELECT embedding.vector, embedding.dim,
-               image.card_code, image.print_index
+               image.card_code, image.print_index, image.language
         FROM embeddings AS embedding
         JOIN card_images AS image ON image.id = embedding.card_image_id
         WHERE embedding.model = ? AND embedding.kind = ?
@@ -51,6 +52,7 @@ def load_index(conn: sqlite3.Connection, model_name: str) -> ReferenceIndex:
             key_ids=np.zeros(0, dtype=np.int64),
             keys=[],
             card_codes=[],
+            languages=[],
         )
 
     vectors = np.stack([from_blob(row["vector"], row["dim"]).astype(np.float32) for row in rows])
@@ -72,6 +74,7 @@ def load_index(conn: sqlite3.Connection, model_name: str) -> ReferenceIndex:
         key_ids=np.array(key_ids, dtype=np.int64),
         keys=keys,
         card_codes=[row["card_code"] for row in rows],
+        languages=[row["language"] for row in rows],
     )
 
 

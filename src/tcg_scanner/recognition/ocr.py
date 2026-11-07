@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -9,6 +10,13 @@ _TO_DIGITS = str.maketrans(
     {"O": "0", "Q": "0", "D": "0", "I": "1", "L": "1", "Z": "2", "S": "5", "G": "6", "B": "8"}
 )
 _CANDIDATE = re.compile(r"([A-Z0-9]{1,3})[\s-]*([A-Z0-9]{2})[\s-]*([A-Z0-9]{3})")
+
+
+@dataclass(frozen=True)
+class CodeReading:
+    code: str | None
+    confidence: float | None = None
+    bbox: list[list[float]] | None = None
 
 
 def normalize_code(text: str) -> str | None:
@@ -44,7 +52,7 @@ class CodeReader:
         use_gpu = torch.cuda.is_available() if gpu is None else gpu
         self._reader = easyocr.Reader(["en"], gpu=use_gpu, verbose=False)
 
-    def read(self, image: np.ndarray) -> str | None:
+    def read(self, image: np.ndarray) -> CodeReading:
         height = image.shape[0]
         detections = self._reader.readtext(image, detail=1, paragraph=False)
         bottom = [
@@ -55,19 +63,35 @@ class CodeReader:
         # The code is printed at the bottom; prefer that band so effect-text noise
         # cannot win on confidence.
         for group in (bottom, detections):
-            code = _best_code(group)
-            if code is not None:
-                return code
-        return None
+            reading = _best_code(group)
+            if reading.code is not None:
+                return reading
+        return CodeReading(code=None)
 
 
-def _best_code(detections: list) -> str | None:
-    best: tuple[float, str] | None = None
-    for _box, text, confidence in detections:
+def _best_code(detections: list) -> CodeReading:
+    best: CodeReading | None = None
+    for box, text, confidence in detections:
         code = normalize_code(text)
-        if code is not None and (best is None or confidence > best[0]):
-            best = (confidence, code)
+        if code is not None and (best is None or confidence > (best.confidence or 0.0)):
+            best = CodeReading(code=code, confidence=float(confidence), bbox=_bbox(box))
     if best is not None:
-        return best[1]
+        return best
+
     # OCR can split "OP08-001" into "OP08-" and "001".
-    return normalize_code(" ".join(text for _box, text, _confidence in detections))
+    code = normalize_code(" ".join(text for _box, text, _confidence in detections))
+    if code is None:
+        return CodeReading(code=None)
+    return CodeReading(code=code, confidence=None, bbox=_union_box(detections))
+
+
+def _bbox(box: list) -> list[list[float]]:
+    return [[float(point[0]), float(point[1])] for point in box]
+
+
+def _union_box(detections: list) -> list[list[float]] | None:
+    if not detections:
+        return None
+    xs = [float(point[0]) for box, _text, _confidence in detections for point in box]
+    ys = [float(point[1]) for box, _text, _confidence in detections for point in box]
+    return [[min(xs), min(ys)], [max(xs), min(ys)], [max(xs), max(ys)], [min(xs), max(ys)]]
