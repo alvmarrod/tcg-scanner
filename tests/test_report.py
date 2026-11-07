@@ -65,6 +65,7 @@ def test_report_describes_a_match():
     assert report["group"] == "photo.jpg"
     assert report["image"] == {"path": "photo.jpg", "width": 1200, "height": 1600}
     assert report["rectification"]["size"] == [600, 838]
+    assert report["rectification"]["rotation"] == 0
     detection = report["detections"][0]
     assert detection["card_code"] == "OP15-002"
     assert detection["print_index"] == 2

@@ -80,6 +80,7 @@ def build_report(
             "size": [CARD_WIDTH, CARD_HEIGHT],
             "rotated": representative.rectified.rotated,
             "flipped": representative.flipped,
+            "rotation": representative.rectified.rotation,
         },
         "preferences": {"language": preferred_language, "currency": preferred_currency},
         "status": "matched" if top is not None else "no_match",

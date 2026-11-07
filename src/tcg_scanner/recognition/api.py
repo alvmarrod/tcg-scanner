@@ -70,7 +70,11 @@ class Recognizer:
         rectified = rectify_file(image)
         upright, reading, flipped = _read_oriented(self.reader, rectified.image)
         if flipped:
-            rectified = replace(rectified, image=upright)
+            rectified = replace(
+                rectified,
+                image=upright,
+                rotation=(rectified.rotation + 180) % 360,
+            )
         query, patches = self.embedder.embed_bgr(rectified.image)
         search = identify(
             self.conn,

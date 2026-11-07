@@ -68,4 +68,5 @@ def test_rectify_rotates_a_sideways_card():
 
     assert result.found
     assert result.rotated
+    assert result.rotation in (90, 270)
     assert result.image.shape == (CARD_HEIGHT, CARD_WIDTH, 3)

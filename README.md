@@ -163,7 +163,10 @@ the misses. `--json` emits the same report as JSON.
 `http://127.0.0.1:9876`; `--host` and `--port` are configurable). Each folder under
 `data/output/` is a run. The run page shows an album of input photos with their matched
 reference image; clicking a tile opens a side-by-side comparison with OCR, candidates,
-prices and warnings, plus previous/next navigation. Dark theme by default, light theme
+prices and warnings, plus previous/next navigation. Input photos that were taken
+sideways are rotated for display only (never cropped or normalized) so the card stands
+like the reference. The run view toggles grid/list and sorts by confidence, price,
+USD, EUR or expansion, ascending or descending. Dark theme by default, light theme
 available. It serves the FastAPI API and the built Svelte UI, and never writes to the
 databases.
 

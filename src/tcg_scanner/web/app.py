@@ -101,9 +101,16 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="no reference image")
         return data_file(row["path"])
 
-    def thumbnail(source: Path) -> Path:
+    def rendered(source: Path, *, rotate: int = 0, thumb: bool = False) -> Path:
+        if rotate == 0 and not thumb:
+            return source
+        if rotate not in (0, 90, 180, 270):
+            raise HTTPException(status_code=400, detail="rotate must be 0, 90, 180 or 270")
+
         stat = source.stat()
-        digest = hashlib.sha1(f"{source}|{stat.st_mtime_ns}|{stat.st_size}".encode()).hexdigest()
+        digest = hashlib.sha1(
+            f"{source}|{stat.st_mtime_ns}|{stat.st_size}|{rotate}|{thumb}".encode()
+        ).hexdigest()
         cache = output_root() / ".thumbs"
         cache.mkdir(parents=True, exist_ok=True)
         target = cache / f"{digest}.jpg"
@@ -112,15 +119,24 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
 
             with Image.open(source) as image:
                 rgb = ImageOps.exif_transpose(image).convert("RGB")
-                rgb.thumbnail(THUMBNAIL_SIZE)
+                if rotate:
+                    rgb = rgb.rotate(-rotate, expand=True)
+                if thumb:
+                    rgb.thumbnail(THUMBNAIL_SIZE)
                 temporary = target.with_suffix(".tmp")
-                rgb.save(temporary, "JPEG", quality=85)
+                rgb.save(temporary, "JPEG", quality=90 if not thumb else 85)
                 temporary.replace(target)
         return target
 
     def summary(run: str, group: str, report: dict) -> dict:
         detection = (report.get("detections") or [None])[0]
         base = f"/api/runs/{quote(run, safe='')}/results/{quote(group, safe='')}"
+        rotation = report.get("rectification", {}).get("rotation", 0) or 0
+        input_url = f"{base}/input"
+        input_thumb = f"{base}/input?thumb=1"
+        if rotation:
+            input_url += f"?rotate={rotation}"
+            input_thumb += f"&rotate={rotation}"
         result = {
             "run": run,
             "group": report.get("group") or group,
@@ -137,11 +153,24 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
             "ocr_code": None,
             "warnings": [warning["code"] for warning in report.get("warnings", [])],
             "photos": len(report.get("photos", [])),
-            "input_url": f"{base}/input",
-            "input_thumb": f"{base}/input?thumb=1",
+            "input_url": input_url,
+            "input_thumb": input_thumb,
+            "input_rotation": rotation,
             "reference_url": None,
             "reference_thumb": None,
+            "price": None,
+            "price_eur": None,
+            "price_usd": None,
+            "expansion": None,
         }
+        prices = report.get("prices") or {}
+        result.update(
+            {
+                "price_eur": prices.get("eur"),
+                "price_usd": prices.get("usd"),
+                "price": prices.get("eur") if prices.get("eur") is not None else prices.get("usd"),
+            }
+        )
         if detection is not None:
             result.update(
                 {
@@ -157,6 +186,7 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
                     "ocr_code": detection.get("ocr", {}).get("code"),
                     "reference_url": f"{base}/reference",
                     "reference_thumb": f"{base}/reference?thumb=1",
+                    "expansion": detection["card_code"].split("-")[0],
                 }
             )
         return result
@@ -231,19 +261,24 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
         return {"summary": summary(run, group, report), "report": report}
 
     @app.get("/api/runs/{run}/results/{group}/input")
-    def input_image(run: str, group: str, thumb: bool = Query(default=False)) -> FileResponse:
+    def input_image(
+        run: str,
+        group: str,
+        thumb: bool = Query(default=False),
+        rotate: int = Query(default=0),
+    ) -> FileResponse:
         report = load_report(run, group)
         image_path = report.get("image", {}).get("path")
         if not image_path:
             raise HTTPException(status_code=404, detail="no input image")
         source = data_file(image_path)
-        return _file_response(thumbnail(source) if thumb else source)
+        return _file_response(rendered(source, rotate=rotate, thumb=thumb))
 
     @app.get("/api/runs/{run}/results/{group}/reference")
     def reference_image(run: str, group: str, thumb: bool = Query(default=False)) -> FileResponse:
         report = load_report(run, group)
         source = reference_file(report)
-        return _file_response(thumbnail(source) if thumb else source)
+        return _file_response(rendered(source, thumb=thumb))
 
     if UI_DIR.is_dir():
         app.mount("/", StaticFiles(directory=UI_DIR, html=True), name="ui")

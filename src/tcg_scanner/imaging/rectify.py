@@ -23,6 +23,7 @@ class Rectified:
     corners: np.ndarray | None = None
     source_size: tuple[int, int] = (0, 0)
     rotated: bool = False
+    rotation: int = 0
 
 
 def rectify_file(path: Path) -> Rectified:
@@ -39,11 +40,15 @@ def rectify(image: np.ndarray) -> Rectified:
     if corners is None:
         return Rectified(image=image, found=False, source_size=source_size)
 
-    top = float(np.linalg.norm(corners[1] - corners[0]))
+    top_vector = corners[1] - corners[0]
+    top = float(np.linalg.norm(top_vector))
     left = float(np.linalg.norm(corners[3] - corners[0]))
     rotated = top > left
+    rotation = 0
     if rotated:
         # The card is sideways in the frame; map its long edge to the height.
+        # Clockwise degrees to apply to the original so it stands like a reference.
+        rotation = 270 if top_vector[0] >= 0 else 90
         corners = corners[[1, 2, 3, 0]]
 
     destination = np.array(
@@ -58,6 +63,7 @@ def rectify(image: np.ndarray) -> Rectified:
         corners=corners,
         source_size=source_size,
         rotated=rotated,
+        rotation=rotation,
     )
 
 

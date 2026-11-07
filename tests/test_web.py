@@ -13,7 +13,7 @@ def _write_image(path: Path, color=(200, 180, 160)):
     Image.new("RGB", (400, 560), color).save(path)
 
 
-def _report(input_path: Path, *, code="OP15-001", print_index=0) -> dict:
+def _report(input_path: Path, *, code="OP15-001", print_index=0, rotation=0) -> dict:
     return {
         "schema_version": 2,
         "group": "card-a",
@@ -23,8 +23,9 @@ def _report(input_path: Path, *, code="OP15-001", print_index=0) -> dict:
             "found": True,
             "corners": [[0, 0], [1, 0], [1, 1], [0, 1]],
             "size": [600, 838],
-            "rotated": False,
+            "rotated": rotation in (90, 270),
             "flipped": False,
+            "rotation": rotation,
         },
         "preferences": {"language": "jp", "currency": "EUR"},
         "detections": [
@@ -69,7 +70,7 @@ def _report(input_path: Path, *, code="OP15-001", print_index=0) -> dict:
     }
 
 
-def _client(tmp_path, *, code="OP15-001", print_index=0):
+def _client(tmp_path, *, code="OP15-001", print_index=0, rotation=0):
     root = tmp_path / "data"
     init_catalog(root / "db" / "catalog.db")
     conn = open_catalog(root / "db" / "catalog.db")
@@ -93,7 +94,8 @@ def _client(tmp_path, *, code="OP15-001", print_index=0):
     run = root / "output" / "run-a"
     run.mkdir(parents=True)
     (run / "card-a.json").write_text(
-        json.dumps(_report(input_path, code=code, print_index=print_index)), encoding="utf-8"
+        json.dumps(_report(input_path, code=code, print_index=print_index, rotation=rotation)),
+        encoding="utf-8",
     )
     (run / "run.json").write_text(
         json.dumps(
@@ -123,6 +125,10 @@ def test_lists_runs_and_results(tmp_path):
     assert summary["card_code"] == "OP15-001"
     assert summary["score"] == 0.9
     assert summary["input_url"].endswith("/input")
+    assert summary["expansion"] == "OP15"
+    assert summary["price_eur"] == 0.1
+    assert summary["price_usd"] == 0.2
+    assert summary["price"] == 0.1
 
     result = client.get("/api/runs/run-a/results/card-a").json()
     assert result["report"]["schema_version"] == 2
@@ -164,3 +170,27 @@ def test_rejects_unknown_runs_and_results(tmp_path):
     assert client.get("/api/runs/nope").status_code == 404
     assert client.get("/api/runs/run-a/results/nope").status_code == 404
     assert client.get("/api/runs/run-a/results/..%2F..%2Frun").status_code == 404
+
+
+def test_input_url_carries_the_display_rotation(tmp_path):
+    client = _client(tmp_path, rotation=90)
+
+    summary = client.get("/api/runs/run-a").json()["results"][0]
+
+    assert summary["input_rotation"] == 90
+    assert "rotate=90" in summary["input_thumb"]
+
+
+def test_rotates_the_input_image_on_request(tmp_path):
+    import io
+
+    from PIL import Image
+
+    client = _client(tmp_path)
+    response = client.get("/api/runs/run-a/results/card-a/input?rotate=90")
+
+    assert response.status_code == 200
+    with Image.open(io.BytesIO(response.content)) as image:
+        assert image.size == (560, 400)
+
+    assert client.get("/api/runs/run-a/results/card-a/input?rotate=45").status_code == 400
