@@ -89,8 +89,12 @@ uv run tcg-scanner eval data/eval/labels.csv
 booster and starter product in the index, sharing one index fetch. It stores the
 set's cards, printings, prices and reference images under `data/`, and is incremental:
 re-running adds only new price points and missing images. Image downloads use a small
-worker pool while request starts stay throttled. Promos and Japanese printings are not
-synced yet.
+worker pool while request starts stay throttled.
+
+Reference images default to Japanese (`--lang jp`); pass `--lang en` for English.
+Card names, text and prices always come from the English product data. A print with no
+asset in the requested language falls back to the other one. Promos are not synced
+yet.
 
 `db check` reports owned rows and open matches whose printing no longer resolves
 against the catalog, missing or unreferenced image files, and reference images without

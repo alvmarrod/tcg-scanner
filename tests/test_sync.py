@@ -175,6 +175,7 @@ def test_download_falls_back_to_the_japanese_image(tmp_path):
             JpFetcher(),
             tmp_path,
             [(key, "https://cdn.example/OP08/OP08-001_p1_EN.webp")],
+            language="en",
             workers=1,
             on_progress=None,
         )
@@ -183,8 +184,78 @@ def test_download_falls_back_to_the_japanese_image(tmp_path):
         image_url = conn.execute(
             "SELECT image_url FROM printings WHERE card_code = 'OP08-001' AND print_index = 1"
         ).fetchone()[0]
-        assert image_url.endswith("_p1_JP.webp")
-        path = conn.execute("SELECT path FROM card_images").fetchone()[0]
-        assert (tmp_path / path).is_file()
+        assert image_url.endswith("_p1_EN.webp")
+        row = conn.execute("SELECT language, path FROM card_images").fetchone()
+        assert row["language"] == "en"  # tagged with the requested language
+        assert (tmp_path / row["path"]).is_file()
+    finally:
+        conn.close()
+
+
+def test_sync_defaults_to_japanese_images(tmp_path):
+    db_path = tmp_path / "catalog.db"
+    init_catalog(db_path)
+    conn = open_catalog(db_path)
+    try:
+        sync_set(conn, "OP08", FakeFetcher(_pages()), tmp_path, now="2026-01-01T00:00:00Z")
+
+        languages = {row[0] for row in conn.execute("SELECT DISTINCT language FROM card_images")}
+        assert languages == {"jp"}
+        urls = [row[0] for row in conn.execute("SELECT image_url FROM printings")]
+        assert urls and all("_JP.webp" in url for url in urls)
+    finally:
+        conn.close()
+
+
+def test_sync_english_mode_stores_english_images(tmp_path):
+    db_path = tmp_path / "catalog.db"
+    init_catalog(db_path)
+    conn = open_catalog(db_path)
+    try:
+        sync_set(
+            conn,
+            "OP08",
+            FakeFetcher(_pages()),
+            tmp_path,
+            language="en",
+            now="2026-01-01T00:00:00Z",
+        )
+
+        languages = {row[0] for row in conn.execute("SELECT DISTINCT language FROM card_images")}
+        assert languages == {"en"}
+        urls = [row[0] for row in conn.execute("SELECT image_url FROM printings")]
+        assert urls and all("_EN.webp" in url for url in urls)
+    finally:
+        conn.close()
+
+
+def test_second_language_keeps_the_printing_identity(tmp_path):
+    db_path = tmp_path / "catalog.db"
+    init_catalog(db_path)
+    conn = open_catalog(db_path)
+    try:
+        sync_set(
+            conn,
+            "OP08",
+            FakeFetcher(_pages()),
+            tmp_path,
+            language="en",
+            now="2026-01-01T00:00:00Z",
+        )
+        english_urls = {
+            (row[0], row[1]): row[2]
+            for row in conn.execute("SELECT card_code, print_index, image_url FROM printings")
+        }
+
+        sync_set(conn, "OP08", FakeFetcher(_pages()), tmp_path, now="2026-01-02T00:00:00Z")
+
+        japanese_urls = {
+            (row[0], row[1]): row[2]
+            for row in conn.execute("SELECT card_code, print_index, image_url FROM printings")
+        }
+        assert japanese_urls == english_urls
+        assert conn.execute("SELECT COUNT(*) FROM card_images").fetchone()[0] == 8
+        languages = {row[0] for row in conn.execute("SELECT DISTINCT language FROM card_images")}
+        assert languages == {"en", "jp"}
     finally:
         conn.close()

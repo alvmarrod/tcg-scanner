@@ -1,4 +1,5 @@
 import sqlite3
+from pathlib import Path
 
 import pytest
 
@@ -94,12 +95,15 @@ def test_cli_db_init_uses_the_data_dir_override(tmp_path, monkeypatch, capsys):
 
 
 def test_init_sets_the_schema_version(tmp_path):
+    from tcg_scanner.db import conn as conn_module
+
     for init, name in ((init_catalog, "catalog"), (init_library, "library")):
         path = tmp_path / f"{name}.db"
         init(path)
         conn = open_catalog(path) if name == "catalog" else open_library(path)
         try:
-            assert conn.execute("PRAGMA user_version").fetchone()[0] == 1
+            version = conn.execute("PRAGMA user_version").fetchone()[0]
+            assert version == conn_module.SCHEMA_VERSIONS[name]
         finally:
             conn.close()
 
@@ -125,17 +129,52 @@ def test_applies_pending_migrations(tmp_path, monkeypatch):
     init_catalog(path)
     monkeypatch.setitem(
         conn_module.MIGRATIONS["catalog"],
-        2,
+        3,
         "ALTER TABLE sets ADD COLUMN extra TEXT;",
     )
-    monkeypatch.setitem(conn_module.SCHEMA_VERSIONS, "catalog", 2)
+    monkeypatch.setitem(conn_module.SCHEMA_VERSIONS, "catalog", 3)
+
+    init_catalog(path)
+
+    conn = open_catalog(path)
+    try:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(sets)")}
+        assert "extra" in columns
+    finally:
+        conn.close()
+
+
+def test_v1_catalog_backfills_image_language(tmp_path):
+    from tcg_scanner.db import conn as conn_module
+
+    path = tmp_path / "catalog.db"
+    conn = conn_module.connect(path)
+    schema = (Path(conn_module.__file__).parent / "schema_catalog.sql").read_text()
+    conn.executescript(schema)
+    conn.execute("PRAGMA user_version = 1")
+    conn.execute("INSERT INTO sets (code, name, kind) VALUES ('OP08', 'Two Legends', 'booster')")
+    conn.execute("INSERT INTO cards (code, name, set_code) VALUES ('OP08-001', 'Chopper', 'OP08')")
+    for index, suffix in ((0, "EN"), (1, "JP")):
+        conn.execute(
+            "INSERT INTO printings (card_code, print_index, set_code, image_url) "
+            "VALUES ('OP08-001', ?, 'OP08', ?)",
+            (index, f"https://cdn/OP08-001_p{index}_{suffix}.webp"),
+        )
+        conn.execute(
+            "INSERT INTO card_images (card_code, print_index, path, sha256) "
+            "VALUES ('OP08-001', ?, ?, ?)",
+            (index, f"images/{index}.webp", str(index)),
+        )
+    conn.commit()
+    conn.close()
 
     init_catalog(path)
 
     conn = open_catalog(path)
     try:
         assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
-        columns = {row["name"] for row in conn.execute("PRAGMA table_info(sets)")}
-        assert "extra" in columns
+        languages = dict(conn.execute("SELECT print_index, language FROM card_images").fetchall())
+        assert languages == {0: "en", 1: "jp"}
     finally:
         conn.close()

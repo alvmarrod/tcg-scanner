@@ -34,6 +34,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--set", action="append", metavar="CODE", help="set code, e.g. OP08 (repeatable)"
     )
     choose.add_argument("--all", action="store_true", help="every booster and starter set")
+    sync.add_argument(
+        "--lang",
+        default="jp",
+        choices=["jp", "en"],
+        help="reference image language (default: jp)",
+    )
     sync.add_argument("--no-images", action="store_true", help="skip downloading card images")
 
     prices = commands.add_parser("prices", help="refresh price history")
@@ -95,7 +101,7 @@ def build_parser() -> argparse.ArgumentParser:
     owned_remove = owned_commands.add_parser("remove", help="delete an owned row")
     owned_remove.add_argument("owned_id", type=int)
     owned_list = owned_commands.add_parser("list", help="list the collection with latest prices")
-    owned_list.add_argument("--source", default="tcgplayer", choices=["tcgplayer", "cardmarket"])
+    owned_list.add_argument("--source", default="auto", choices=["auto", "eur", "usd"])
 
     evaluation = commands.add_parser("eval", help="score recognition against labeled photos")
     evaluation.add_argument(
@@ -182,8 +188,9 @@ def _catalog_sync(args: argparse.Namespace) -> int:
     try:
         with Fetcher() as fetcher:
             common = {
+                "language": args.lang,
                 "with_images": not args.no_images,
-                "on_progress": _progress("images"),
+                "on_progress": _progress(f"{args.lang} images"),
             }
             if args.all:
                 results = sync_all(conn, fetcher, config.data_dir(), **common)

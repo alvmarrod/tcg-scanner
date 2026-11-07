@@ -106,6 +106,7 @@ def add_owned(
     currency: str | None = None,
     note: str | None = None,
 ) -> int:
+    language = language or "jp"
     printing = get_printing(conn, card_code, print_index)
     if printing is None:
         raise ValueError(f"unknown printing: {card_code} #{print_index}")
@@ -157,28 +158,44 @@ def add_owned(
     return int(cursor.lastrowid)
 
 
-def list_owned(conn: sqlite3.Connection, *, source: str = "tcgplayer") -> list[sqlite3.Row]:
+def list_owned(conn: sqlite3.Connection, *, source: str = "auto") -> list[sqlite3.Row]:
+    if source not in ("auto", "eur", "usd"):
+        raise ValueError(f"unknown price source: {source}")
+
     return conn.execute(
         """
         SELECT owned.id, owned.card_code, owned.print_index, owned.card_name,
                owned.set_code, owned.variant_label, owned.quantity, owned.condition,
                owned.language, owned.paid_price,
                printing.card_code AS resolved,
-               CASE WHEN printing.card_code IS NULL THEN NULL ELSE price.amount END AS price,
-               CASE WHEN printing.card_code IS NULL THEN NULL ELSE price.currency END
-                   AS currency
+               CASE
+                   WHEN printing.card_code IS NULL THEN NULL
+                   WHEN :source = 'usd' THEN usd.amount
+                   WHEN :source = 'eur' THEN eur.amount
+                   ELSE COALESCE(eur.amount, usd.amount)
+               END AS price,
+               CASE
+                   WHEN printing.card_code IS NULL THEN NULL
+                   WHEN :source = 'usd' THEN usd.currency
+                   WHEN :source = 'eur' THEN eur.currency
+                   ELSE COALESCE(eur.currency, usd.currency)
+               END AS currency
         FROM owned
         LEFT JOIN catalog.printings AS printing
             ON printing.card_code = owned.card_code
             AND printing.print_index = owned.print_index
             AND printing.image_url = owned.image_url
-        LEFT JOIN catalog.latest_prices AS price
-            ON price.card_code = owned.card_code
-            AND price.print_index = owned.print_index
-            AND price.source = ?
+        LEFT JOIN catalog.latest_prices AS eur
+            ON eur.card_code = owned.card_code
+            AND eur.print_index = owned.print_index
+            AND eur.source = 'cardmarket'
+        LEFT JOIN catalog.latest_prices AS usd
+            ON usd.card_code = owned.card_code
+            AND usd.print_index = owned.print_index
+            AND usd.source = 'tcgplayer'
         ORDER BY owned.id
         """,
-        (source,),
+        {"source": source},
     ).fetchall()
 
 

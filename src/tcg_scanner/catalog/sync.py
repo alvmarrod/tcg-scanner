@@ -16,6 +16,7 @@ from tcg_scanner.catalog.fetch import Fetcher
 from tcg_scanner.catalog.parse import (
     ParsedSet,
     base_image_url,
+    language_image_url,
     parse_cards,
     parse_index,
     variant_image_url,
@@ -57,6 +58,7 @@ def sync_set(
     fetcher: Fetcher,
     data_root: Path,
     *,
+    language: str = "jp",
     with_images: bool = True,
     now: str | None = None,
     workers: int = 4,
@@ -67,6 +69,7 @@ def sync_set(
         [set_code],
         fetcher,
         data_root,
+        language=language,
         with_images=with_images,
         now=now,
         workers=workers,
@@ -80,6 +83,7 @@ def sync_sets(
     fetcher: Fetcher,
     data_root: Path,
     *,
+    language: str = "jp",
     with_images: bool = True,
     now: str | None = None,
     workers: int = 4,
@@ -102,6 +106,7 @@ def sync_sets(
         entries,
         fetcher,
         data_root,
+        language=language,
         with_images=with_images,
         now=now,
         workers=workers,
@@ -114,6 +119,7 @@ def sync_all(
     fetcher: Fetcher,
     data_root: Path,
     *,
+    language: str = "jp",
     with_images: bool = True,
     now: str | None = None,
     workers: int = 4,
@@ -127,6 +133,7 @@ def sync_all(
         entries,
         fetcher,
         data_root,
+        language=language,
         with_images=with_images,
         now=now,
         workers=workers,
@@ -141,6 +148,7 @@ def _sync_entries(
     fetcher: Fetcher,
     data_root: Path,
     *,
+    language: str,
     with_images: bool,
     now: str | None,
     workers: int,
@@ -175,10 +183,11 @@ def _sync_entries(
             base_image = base_image_url(card.image_url)
             for printing in card.printings:
                 printing_set = _set_for_name(conn, printing.set_name, by_name)
-                image_url = (
+                image_url = language_image_url(
                     card.image_url
                     if printing.current
-                    else variant_image_url(base_image, printing.print_index)
+                    else variant_image_url(base_image, printing.print_index),
+                    language,
                 )
                 printing_key = catalog.upsert_printing(
                     conn,
@@ -210,7 +219,7 @@ def _sync_entries(
                 if (
                     with_images
                     and printing_key not in jobs
-                    and not catalog.has_reference_image(conn, *printing_key)
+                    and not catalog.has_reference_image(conn, *printing_key, language)
                 ):
                     jobs[printing_key] = image_url
                     owners[printing_key] = entry.code
@@ -221,6 +230,7 @@ def _sync_entries(
         fetcher,
         data_root,
         list(jobs.items()),
+        language=language,
         workers=workers,
         on_progress=on_progress,
     ):
@@ -307,17 +317,15 @@ def _set_for_name(conn: sqlite3.Connection, name: str, by_name: dict[str, str]) 
     return code
 
 
-def _fetch_image(fetcher: Fetcher, url: str) -> tuple[bytes, str]:
-    """Fetch a reference image, falling back to its Japanese print.
+def _fetch_image(fetcher: Fetcher, url: str, language: str) -> tuple[bytes, str]:
+    """Fetch a reference image, falling back to the other language if needed.
 
-    Some reprinted arts exist only in Japanese; the English URL 403s for them.
+    Some reprinted arts exist only in one language, and its URL 403s otherwise.
     """
     try:
         return fetcher.content(url), url
     except httpx.HTTPStatusError:
-        if "_EN." not in url:
-            raise
-        fallback = url.replace("_EN.", "_JP.")
+        fallback = language_image_url(url, "en" if language == "jp" else "jp")
         return fetcher.content(fallback), fallback
 
 
@@ -327,6 +335,7 @@ def _download_images(
     data_root: Path,
     jobs: list[tuple[PrintingKey, str]],
     *,
+    language: str,
     workers: int,
     on_progress: Progress | None,
 ) -> list[PrintingKey]:
@@ -335,7 +344,9 @@ def _download_images(
 
     downloaded: list[PrintingKey] = []
     with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
-        futures = {pool.submit(_fetch_image, fetcher, url): (key, url) for key, url in jobs}
+        futures = {
+            pool.submit(_fetch_image, fetcher, url, language): (key, url) for key, url in jobs
+        }
         for future in as_completed(futures):
             printing_key, url = futures[future]
             try:
@@ -347,13 +358,8 @@ def _download_images(
                 print(f"warning: {url}: {type(error).__name__}", file=sys.stderr)
                 continue
 
-            if actual_url != url:
-                catalog.set_printing_image_url(
-                    conn,
-                    card_code=printing_key[0],
-                    print_index=printing_key[1],
-                    image_url=actual_url,
-                )
+            # Tag with the requested language even when the other language's asset
+            # was used, so the next sync does not retry the missing one forever.
             path, digest = store_image(
                 data, data_root, Path(urlsplit(actual_url).path).suffix or ".webp"
             )
@@ -361,6 +367,7 @@ def _download_images(
                 conn,
                 card_code=printing_key[0],
                 print_index=printing_key[1],
+                language=language,
                 path=path.relative_to(data_root).as_posix(),
                 sha256=digest,
             )

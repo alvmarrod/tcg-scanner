@@ -85,7 +85,6 @@ def upsert_printing(
             set_code = excluded.set_code,
             rarity = excluded.rarity,
             variant_label = excluded.variant_label,
-            image_url = excluded.image_url,
             tcgplayer_id = excluded.tcgplayer_id,
             cardmarket_id = excluded.cardmarket_id
         """,
@@ -134,14 +133,16 @@ def add_price(
     return True
 
 
-def has_reference_image(conn: sqlite3.Connection, card_code: str, print_index: int) -> bool:
+def has_reference_image(
+    conn: sqlite3.Connection, card_code: str, print_index: int, language: str
+) -> bool:
     row = conn.execute(
         """
         SELECT 1 FROM card_images
-        WHERE card_code = ? AND print_index = ? AND origin = 'reference'
+        WHERE card_code = ? AND print_index = ? AND origin = 'reference' AND language = ?
         LIMIT 1
         """,
-        (card_code, print_index),
+        (card_code, print_index, language),
     ).fetchone()
     return row is not None
 
@@ -151,6 +152,7 @@ def add_card_image(
     *,
     card_code: str,
     print_index: int,
+    language: str,
     path: str,
     sha256: str,
     width: int | None = None,
@@ -158,21 +160,9 @@ def add_card_image(
 ) -> None:
     conn.execute(
         """
-        INSERT INTO card_images (card_code, print_index, path, sha256, width, height, origin)
-        VALUES (?, ?, ?, ?, ?, ?, 'reference')
+        INSERT INTO card_images (card_code, print_index, language, path, sha256,
+                                 width, height, origin)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'reference')
         """,
-        (card_code, print_index, path, sha256, width, height),
-    )
-
-
-def set_printing_image_url(
-    conn: sqlite3.Connection,
-    *,
-    card_code: str,
-    print_index: int,
-    image_url: str,
-) -> None:
-    conn.execute(
-        "UPDATE printings SET image_url = ? WHERE card_code = ? AND print_index = ?",
-        (image_url, card_code, print_index),
+        (card_code, print_index, language, path, sha256, width, height),
     )

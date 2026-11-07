@@ -85,3 +85,36 @@ def test_identify_returns_card_details(tmp_path):
         assert candidates[0].image_url == "http://img/001.webp"
     finally:
         conn.close()
+
+
+def test_identify_retries_without_a_misread_code(tmp_path):
+    db_path = tmp_path / "catalog.db"
+    init_catalog(db_path)
+    conn = open_catalog(db_path)
+    try:
+        conn.execute(
+            "INSERT INTO sets (code, name, kind) VALUES ('OP08', 'Two Legends', 'booster')"
+        )
+        conn.execute(
+            "INSERT INTO cards (code, name, set_code) VALUES ('OP08-001', 'Chopper', 'OP08')"
+        )
+        conn.execute(
+            "INSERT INTO cards (code, name, set_code) VALUES ('OP08-002', 'Marco', 'OP08')"
+        )
+        conn.execute(
+            "INSERT INTO printings (card_code, print_index, set_code, variant_label, image_url) "
+            "VALUES ('OP08-001', 0, 'OP08', 'base', 'http://img/001.webp')"
+        )
+        conn.execute(
+            "INSERT INTO printings (card_code, print_index, set_code, variant_label, image_url) "
+            "VALUES ('OP08-002', 0, 'OP08', 'aa', 'http://img/002.webp')"
+        )
+        conn.commit()
+
+        candidates = identify(
+            conn, _index(), np.array([1.0, 0.0, 0.0], dtype=np.float32), code="DFO92-850"
+        )
+
+        assert candidates[0].card_code == "OP08-001"
+    finally:
+        conn.close()

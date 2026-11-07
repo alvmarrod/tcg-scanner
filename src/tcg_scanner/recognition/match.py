@@ -70,6 +70,9 @@ def identify(
     top_k: int = 5,
 ) -> list[Candidate]:
     ranked = rank(index, query, code=code, top_k=top_k)
+    if not ranked and code is not None:
+        # A misread code must not turn a good image match into "no match".
+        ranked = rank(index, query, code=None, top_k=top_k)
     if not ranked:
         return []
 

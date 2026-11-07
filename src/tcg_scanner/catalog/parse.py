@@ -106,6 +106,11 @@ def variant_image_url(base_url: str, index: int) -> str:
     return re.sub(r"_([A-Z]{2})\.webp$", lambda m: f"_p{index}_{m.group(1)}.webp", base_url)
 
 
+def language_image_url(url: str, language: str) -> str:
+    suffix = "JP" if language == "jp" else "EN"
+    return re.sub(r"_(?:EN|JP)\.webp$", f"_{suffix}.webp", url)
+
+
 def base_image_url(url: str) -> str:
     """Strip a print suffix so variants can be derived from it."""
     return re.sub(r"_p\d+(_[A-Z]{2}\.webp)$", r"\1", url)

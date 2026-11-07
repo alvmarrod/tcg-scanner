@@ -8,8 +8,28 @@ _SCHEMA_DIR = Path(__file__).parent
 # The schema files are version 1 and stay frozen. Later changes are added as
 # migrations keyed by the version they produce; fresh databases run the baseline
 # and then every migration in order.
-SCHEMA_VERSIONS = {"catalog": 1, "library": 1}
-MIGRATIONS: dict[str, dict[int, str]] = {"catalog": {}, "library": {}}
+SCHEMA_VERSIONS = {"catalog": 2, "library": 1}
+MIGRATIONS: dict[str, dict[int, str]] = {
+    "catalog": {
+        2: """
+            ALTER TABLE card_images ADD COLUMN language TEXT NOT NULL DEFAULT 'jp';
+
+            -- Backfill existing reference images from the printing URL: only the
+            -- Japanese-only fallbacks do not end in _EN.webp.
+            UPDATE card_images SET language = 'en'
+            WHERE EXISTS (
+                SELECT 1 FROM printings
+                WHERE printings.card_code = card_images.card_code
+                  AND printings.print_index = card_images.print_index
+                  AND printings.image_url LIKE '%_EN.webp'
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_card_images_language
+                ON card_images (card_code, print_index, language);
+        """,
+    },
+    "library": {},
+}
 
 
 def connect(path: Path) -> sqlite3.Connection:

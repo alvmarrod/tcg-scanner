@@ -45,6 +45,29 @@ class CodeReader:
         self._reader = easyocr.Reader(["en"], gpu=use_gpu, verbose=False)
 
     def read(self, image: np.ndarray) -> str | None:
-        results = self._reader.readtext(image, detail=1, paragraph=False)
-        # OCR may split "OP08-001" into "OPO8-" and "001"; search the joined detections.
-        return normalize_code(" ".join(text for _, text, _confidence in results))
+        height = image.shape[0]
+        detections = self._reader.readtext(image, detail=1, paragraph=False)
+        bottom = [
+            detection
+            for detection in detections
+            if min(point[1] for point in detection[0]) >= 0.85 * height
+        ]
+        # The code is printed at the bottom; prefer that band so effect-text noise
+        # cannot win on confidence.
+        for group in (bottom, detections):
+            code = _best_code(group)
+            if code is not None:
+                return code
+        return None
+
+
+def _best_code(detections: list) -> str | None:
+    best: tuple[float, str] | None = None
+    for _box, text, confidence in detections:
+        code = normalize_code(text)
+        if code is not None and (best is None or confidence > best[0]):
+            best = (confidence, code)
+    if best is not None:
+        return best[1]
+    # OCR can split "OP08-001" into "OP08-" and "001".
+    return normalize_code(" ".join(text for _box, text, _confidence in detections))

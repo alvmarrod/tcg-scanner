@@ -2,6 +2,7 @@ from pathlib import Path
 
 from tcg_scanner.catalog.parse import (
     base_image_url,
+    language_image_url,
     parse_cards,
     parse_index,
     variant_image_url,
@@ -67,3 +68,14 @@ def test_base_image_url_strips_an_existing_print_suffix():
     assert base_image_url(url) == "https://cdn.example/one-piece/OP07/OP07-109_EN.webp"
     plain = "https://cdn.example/one-piece/OP08/OP08-001_EN.webp"
     assert base_image_url(plain) == plain
+
+
+def test_language_image_url_swaps_the_language_suffix():
+    base = "https://cdn.example/one-piece/OP08/OP08-001_EN.webp"
+    assert language_image_url(base, "jp") == "https://cdn.example/one-piece/OP08/OP08-001_JP.webp"
+    variant = "https://cdn.example/one-piece/OP08/OP08-001_p2_EN.webp"
+    assert (
+        language_image_url(variant, "jp")
+        == "https://cdn.example/one-piece/OP08/OP08-001_p2_JP.webp"
+    )
+    assert language_image_url(variant, "en") == variant

@@ -284,3 +284,42 @@ def test_collection_total_sums_prices_and_counts_unpriced(tmp_path):
         assert unpriced == 1
     finally:
         conn.close()
+
+
+def test_add_owned_defaults_to_japanese(tmp_path):
+    conn = _library(tmp_path, _catalog(tmp_path))
+    try:
+        add_owned(conn, card_code="OP08-001", print_index=0)
+        row = conn.execute("SELECT language FROM owned").fetchone()
+        assert row["language"] == "jp"
+    finally:
+        conn.close()
+
+
+def test_owned_list_prefers_euro_prices(tmp_path):
+    conn = _library(tmp_path, _catalog(tmp_path))
+    try:
+        add_owned(conn, card_code="OP08-001", print_index=0)
+        conn.execute(
+            "INSERT INTO prices (card_code, print_index, source, currency, amount, fetched_at) "
+            "VALUES ('OP08-001', 0, 'cardmarket', 'EUR', 1.1, '2026-01-01')"
+        )
+
+        auto = list_owned(conn)[0]
+        assert auto["price"] == 1.1
+        assert auto["currency"] == "EUR"
+
+        usd = list_owned(conn, source="usd")[0]
+        assert (usd["price"], usd["currency"]) == (1.5, "USD")
+    finally:
+        conn.close()
+
+
+def test_owned_list_eur_source_does_not_fall_back(tmp_path):
+    conn = _library(tmp_path, _catalog(tmp_path))
+    try:
+        add_owned(conn, card_code="OP08-001", print_index=0)
+        row = list_owned(conn, source="eur")[0]
+        assert row["price"] is None
+    finally:
+        conn.close()
