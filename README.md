@@ -66,6 +66,7 @@ baseline; later changes are ordered migrations in `db/conn.py` and run on open.
 
 ```sh
 uv run tcg-scanner db init
+uv run tcg-scanner db check
 uv run tcg-scanner catalog sync --set OP08
 uv run tcg-scanner catalog sync --set OP08 --no-images
 uv run tcg-scanner prices refresh
@@ -84,6 +85,10 @@ uv run tcg-scanner eval data/eval/labels.csv
 reference images under `data/`, and is incremental: re-running adds only new price
 points and missing images. Image downloads use a small worker pool while request
 starts stay throttled.
+
+`db check` reports owned rows and open matches whose printing no longer resolves
+against the catalog, missing or unreferenced image files, and reference images without
+vectors. It exits 1 when anything is off, so it works in cron or CI.
 
 `prices refresh` appends only price points that changed, for one `--set` or every
 synced set. It never creates printings, so run `catalog sync` first. There is no

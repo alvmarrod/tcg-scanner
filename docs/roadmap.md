@@ -13,7 +13,7 @@ Legend: ⬜ not started · ✅ done
 8. ⬜ **[Dsn] Multi-photo grouping** — how several photos of the same card combine before matching: aggregate scores, use the best, front/back, discard blurry duplicates. Currently one photo equals one match.
 9. ✅ **[I] Price refresh path** — re-syncing a set already appends prices, but there's no lightweight "refresh all prices" and no cadence.
 10. ✅ **[I] Collection ergonomics** — merge quantity on repeat accept, edit/delete owned rows, condition/language defaults, total collection value.
-11. ⬜ **[I] `db check`** — report owned/matches whose snapshot no longer resolves after a re-sync, orphan images, index drift. Makes the snapshot guard visible instead of silent.
+11. ✅ **[I] `db check`** — report owned/matches whose snapshot no longer resolves after a re-sync, orphan images, index drift. Makes the snapshot guard visible instead of silent.
 12. ✅ **[I] Schema versioning/migrations** — `PRAGMA user_version` plus real migrations. `CREATE IF NOT EXISTS` cannot evolve `library.db`, which now holds user data.
 13. ⬜ **[I] Augmented reference vectors** — perspective/brightness variants per printing. Only if eval shows single references are fragile under angle/light.
 14. ✅ **[I] Patch-token verification / ORB tie-break** — for prints that differ only by foil or border, which global DINOv2 conflates. Storage cost already measured (~1 MB/image as patch tokens).

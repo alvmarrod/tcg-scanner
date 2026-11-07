@@ -24,6 +24,7 @@ def build_parser() -> argparse.ArgumentParser:
     db = commands.add_parser("db", help="manage the local databases")
     db_commands = db.add_subparsers(dest="db_command", required=True)
     db_commands.add_parser("init", help="create the catalog and library databases")
+    db_commands.add_parser("check", help="report catalog/library and image drift")
 
     catalog = commands.add_parser("catalog", help="sync card reference data")
     catalog_commands = catalog.add_subparsers(dest="catalog_command", required=True)
@@ -107,6 +108,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     handlers = {
         ("db", "init"): _db_init,
+        ("db", "check"): _db_check,
         ("catalog", "sync"): _catalog_sync,
         ("prices", "refresh"): _prices_refresh,
         ("index", "build"): _index_build,
@@ -134,6 +136,40 @@ def _db_init(args: argparse.Namespace) -> int:
         init(path)
         print(f"initialized {path}")
     return 0
+
+
+def _db_check(args: argparse.Namespace) -> int:
+    from tcg_scanner.db.check import check
+    from tcg_scanner.recognition.embed import MODEL_NAME
+
+    conn = _open_library_with_catalog()
+    try:
+        result = check(conn, config.data_dir(), MODEL_NAME)
+    finally:
+        conn.close()
+
+    print(f"owned: {result.owned_total} rows, {len(result.unresolved_owned)} unresolved")
+    print(f"matches: {result.matches_total} open, {len(result.unresolved_matches)} unresolved")
+    print(
+        f"images: {result.images_total} referenced, {len(result.missing_files)} missing, "
+        f"{len(result.unreferenced_files)} unreferenced"
+    )
+    print(f"index: {result.unindexed_images} images missing vectors ({MODEL_NAME})")
+
+    for label, ids in (
+        ("unresolved owned", result.unresolved_owned),
+        ("unresolved matches", result.unresolved_matches),
+    ):
+        if ids:
+            print(f"{label}: {', '.join(str(value) for value in ids)}")
+    for label, paths in (
+        ("missing files", result.missing_files),
+        ("unreferenced files", result.unreferenced_files),
+    ):
+        for path in paths:
+            print(f"{label}: {path}")
+
+    return 0 if result.ok else 1
 
 
 def _catalog_sync(args: argparse.Namespace) -> int:
