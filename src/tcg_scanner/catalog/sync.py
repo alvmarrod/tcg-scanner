@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 import sqlite3
 import sys
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -19,6 +21,8 @@ from tcg_scanner.catalog.parse import (
 )
 from tcg_scanner.db import catalog
 from tcg_scanner.images import store_image
+
+Progress = Callable[[int, int], None]
 
 
 @dataclass(frozen=True)
@@ -38,6 +42,8 @@ def sync_set(
     *,
     with_images: bool = True,
     now: str | None = None,
+    workers: int = 4,
+    on_progress: Progress | None = None,
 ) -> SyncResult:
     set_code = set_code.upper()
     known = {entry.code: entry for entry in parse_index(fetcher.text("/cards"))}
@@ -58,6 +64,7 @@ def sync_set(
     cards = parse_cards(fetcher.text(f"/cards/{target.slug}?display=full"))
     fetched_at = now or datetime.now(UTC).isoformat(timespec="seconds")
     printings = prices = images = 0
+    image_jobs: list[tuple[tuple[str, int], str]] = []
 
     for card in cards:
         card_set = card.code.split("-")[0]
@@ -101,9 +108,17 @@ def sync_set(
                     prices += 1
 
             if with_images and not catalog.has_reference_image(conn, *printing_key):
-                if _download_image(conn, fetcher, data_root, printing_key, image_url):
-                    images += 1
+                image_jobs.append((printing_key, image_url))
 
+    conn.commit()
+    images = _download_images(
+        conn,
+        fetcher,
+        data_root,
+        image_jobs,
+        workers=workers,
+        on_progress=on_progress,
+    )
     conn.commit()
     return SyncResult(
         set_code=set_code,
@@ -126,28 +141,41 @@ def _set_for_name(conn: sqlite3.Connection, name: str, by_name: dict[str, str]) 
     return code
 
 
-def _download_image(
+def _download_images(
     conn: sqlite3.Connection,
     fetcher: Fetcher,
     data_root: Path,
-    printing_key: tuple[str, int],
-    url: str,
-) -> bool:
-    try:
-        data = fetcher.content(url)
-    except httpx.HTTPStatusError as error:
-        print(f"warning: {url}: HTTP {error.response.status_code}", file=sys.stderr)
-        return False
-    except httpx.HTTPError as error:
-        print(f"warning: {url}: {type(error).__name__}", file=sys.stderr)
-        return False
+    jobs: list[tuple[tuple[str, int], str]],
+    *,
+    workers: int,
+    on_progress: Progress | None,
+) -> int:
+    if not jobs:
+        return 0
 
-    path, digest = store_image(data, data_root, Path(urlsplit(url).path).suffix or ".webp")
-    catalog.add_card_image(
-        conn,
-        card_code=printing_key[0],
-        print_index=printing_key[1],
-        path=path.relative_to(data_root).as_posix(),
-        sha256=digest,
-    )
-    return True
+    downloaded = 0
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+        futures = {pool.submit(fetcher.content, url): (key, url) for key, url in jobs}
+        for future in as_completed(futures):
+            printing_key, url = futures[future]
+            try:
+                data = future.result()
+            except httpx.HTTPStatusError as error:
+                print(f"warning: {url}: HTTP {error.response.status_code}", file=sys.stderr)
+                continue
+            except httpx.HTTPError as error:
+                print(f"warning: {url}: {type(error).__name__}", file=sys.stderr)
+                continue
+
+            path, digest = store_image(data, data_root, Path(urlsplit(url).path).suffix or ".webp")
+            catalog.add_card_image(
+                conn,
+                card_code=printing_key[0],
+                print_index=printing_key[1],
+                path=path.relative_to(data_root).as_posix(),
+                sha256=digest,
+            )
+            downloaded += 1
+            if on_progress is not None:
+                on_progress(downloaded, len(jobs))
+    return downloaded

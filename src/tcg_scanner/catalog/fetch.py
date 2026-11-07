@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 import time
 
 import httpx
@@ -18,6 +19,7 @@ class Fetcher:
         )
         self._delay = delay
         self._last = 0.0
+        self._lock = threading.Lock()
 
     def __enter__(self) -> Fetcher:
         return self
@@ -29,10 +31,12 @@ class Fetcher:
         self._client.close()
 
     def _get(self, url: str) -> httpx.Response:
-        wait = self._delay - (time.monotonic() - self._last)
-        if wait > 0:
-            time.sleep(wait)
-        self._last = time.monotonic()
+        # The lock spaces request starts even when downloads run in a pool.
+        with self._lock:
+            wait = self._delay - (time.monotonic() - self._last)
+            if wait > 0:
+                time.sleep(wait)
+            self._last = time.monotonic()
         response = self._client.get(url)
         response.raise_for_status()
         return response

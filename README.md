@@ -78,7 +78,8 @@ uv run tcg-scanner eval data/eval/labels.csv
 
 `catalog sync` needs network access. It stores the set's cards, printings, prices and
 reference images under `data/`, and is incremental: re-running adds only new price
-points and missing images.
+points and missing images. Image downloads use a small worker pool while request
+starts stay throttled.
 
 `index build` embeds every reference image that has no vector yet. The first run
 downloads the DINOv2 weights (~85 MB); it uses CUDA when available.

@@ -8,6 +8,7 @@ from pathlib import Path
 import numpy as np
 
 EmbedFn = Callable[[list[Path]], np.ndarray]
+Progress = Callable[[int, int], None]
 
 # Global descriptors only for now; patch tokens are deferred until matching needs them.
 KIND_GLOBAL = "global"
@@ -81,6 +82,7 @@ def build_index(
     *,
     batch_size: int = 8,
     limit: int | None = None,
+    on_progress: Progress | None = None,
 ) -> IndexResult:
     query = """
         SELECT image.id, image.path
@@ -97,9 +99,12 @@ def build_index(
         query += " LIMIT ?"
         params.append(limit)
 
+    rows = conn.execute(query, params).fetchall()
+    total = len(rows)
+
     embedded = missing = 0
     batch: list[tuple[int, Path]] = []
-    for row in conn.execute(query, params):
+    for row in rows:
         path = data_root / row["path"]
         if path.is_file():
             batch.append((row["id"], path))
@@ -108,8 +113,12 @@ def build_index(
         if len(batch) == batch_size:
             embedded += _embed_batch(conn, embed, model_name, batch)
             batch = []
+            if on_progress is not None:
+                on_progress(embedded, total)
 
     embedded += _embed_batch(conn, embed, model_name, batch)
+    if on_progress is not None:
+        on_progress(embedded, total)
     conn.commit()
     return IndexResult(embedded=embedded, missing=missing)
 

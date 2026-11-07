@@ -120,6 +120,7 @@ def _catalog_sync(args: argparse.Namespace) -> int:
                 fetcher,
                 config.data_dir(),
                 with_images=not args.no_images,
+                on_progress=_progress("images"),
             )
     except ValueError as error:
         print(error, file=sys.stderr)
@@ -145,6 +146,14 @@ def _require_recognition(*modules: str) -> None:
         )
 
 
+def _progress(label: str):
+    def report(done: int, total: int) -> None:
+        if total and (done % 100 == 0 or done == total):
+            print(f"{label}: {done}/{total}", file=sys.stderr)
+
+    return report
+
+
 def _index_build(args: argparse.Namespace) -> int:
     _require_recognition("timm")
 
@@ -162,6 +171,7 @@ def _index_build(args: argparse.Namespace) -> int:
             embedder.model_name,
             batch_size=args.batch_size,
             limit=args.limit,
+            on_progress=_progress("embedded"),
         )
     finally:
         conn.close()
