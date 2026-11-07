@@ -103,9 +103,12 @@ Requires [uv](https://docs.astral.sh/uv/). The virtualenv and Python version are
 managed per-repo.
 
 ```sh
-uv sync                      # .venv + dependencies
+uv sync --extra recognition  # .venv + dependencies (including torch)
 uv run pre-commit install    # git hooks
 ```
+
+`uv sync` alone installs everything except the model stack; `index`, `inspect`,
+`identify` and `eval` then exit with a message telling you to add the extra.
 
 ```sh
 uv run pre-commit run --all-files
@@ -116,7 +119,7 @@ uv run pytest
 ## Install as a tool
 
 ```sh
-uv tool install .
+uv tool install ".[recognition]"
 tcg-scanner --help
 ```
 

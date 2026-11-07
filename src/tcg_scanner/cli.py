@@ -134,7 +134,20 @@ def _catalog_sync(args: argparse.Namespace) -> int:
     return 0
 
 
+def _require_recognition(*modules: str) -> None:
+    import importlib.util
+
+    missing = [name for name in modules if importlib.util.find_spec(name) is None]
+    if missing:
+        raise SystemExit(
+            f"missing optional dependencies: {', '.join(missing)}. Install them with "
+            '`uv sync --extra recognition` or `uv tool install ".[recognition]"`.'
+        )
+
+
 def _index_build(args: argparse.Namespace) -> int:
+    _require_recognition("timm")
+
     from tcg_scanner.recognition.embed import Embedder
     from tcg_scanner.recognition.index import build_index
 
@@ -158,6 +171,8 @@ def _index_build(args: argparse.Namespace) -> int:
 
 
 def _inspect(args: argparse.Namespace) -> int:
+    _require_recognition("easyocr")
+
     from tcg_scanner.imaging.rectify import rectify_file, write_image
     from tcg_scanner.recognition.ocr import CodeReader
 
@@ -186,6 +201,8 @@ def _snapshot(candidate) -> dict[str, object]:
 
 
 def _identify(args: argparse.Namespace) -> int:
+    _require_recognition("easyocr", "timm")
+
     from datetime import UTC, datetime
 
     from tcg_scanner.db import open_library
@@ -349,6 +366,8 @@ def _owned_list(args: argparse.Namespace) -> int:
 
 
 def _evaluate(args: argparse.Namespace) -> int:
+    _require_recognition("easyocr", "timm")
+
     import json
 
     from tcg_scanner.eval.run import evaluate, load_labels, score_summary

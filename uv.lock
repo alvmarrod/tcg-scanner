@@ -1179,10 +1179,15 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "beautifulsoup4" },
-    { name = "easyocr" },
     { name = "httpx" },
     { name = "numpy" },
     { name = "opencv-python-headless" },
+    { name = "pillow" },
+]
+
+[package.optional-dependencies]
+recognition = [
+    { name = "easyocr" },
     { name = "timm" },
     { name = "torch" },
     { name = "torchvision" },
@@ -1198,14 +1203,16 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "beautifulsoup4", specifier = ">=4.15.0" },
-    { name = "easyocr", specifier = ">=1.7.2" },
+    { name = "easyocr", marker = "extra == 'recognition'", specifier = ">=1.7.2" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "numpy", specifier = ">=2.5.4" },
     { name = "opencv-python-headless", specifier = ">=5.0.0.93" },
-    { name = "timm", specifier = ">=1.0.31" },
-    { name = "torch", specifier = ">=2.15.0" },
-    { name = "torchvision", specifier = ">=0.29.2" },
+    { name = "pillow", specifier = ">=13.0.0" },
+    { name = "timm", marker = "extra == 'recognition'", specifier = ">=1.0.31" },
+    { name = "torch", marker = "extra == 'recognition'", specifier = ">=2.15.0" },
+    { name = "torchvision", marker = "extra == 'recognition'", specifier = ">=0.29.2" },
 ]
+provides-extras = ["recognition"]
 
 [package.metadata.requires-dev]
 dev = [
