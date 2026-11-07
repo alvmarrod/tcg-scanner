@@ -21,10 +21,11 @@ hoping the model is invariant.
 
 ## Pipeline
 
-1. **Detect corners** — find the card quadrilateral (contours/Hough; a small
-   segmentation model if that proves brittle).
-2. **Rectify** — homography warp to a canonical rectangle. This is what makes angle
-   and perspective a non-issue; it also fixes the crop for OCR.
+1. **Detect corners** — on a downscaled copy (full-resolution phone photos fragment
+   the edges), find a quadrilateral with card-like aspect ratio.
+2. **Rectify** — homography warp to a canonical portrait rectangle. A sideways card is
+   turned upright by mapping its long edge to the height; if OCR then finds no code,
+   the crop is tried upside down before embedding.
 3. **Normalize** — exposure and white balance against the lamp, so two photos of the
    same card under different light produce comparable vectors.
 4. **OCR (soft signal)** — read the code from the rectified card with EasyOCR

@@ -10,6 +10,11 @@ import numpy as np
 CARD_WIDTH = 600
 CARD_HEIGHT = 838
 
+# Detection runs on a downscaled copy: full-resolution phone photos fragment the
+# Canny edges badly enough that no card contour survives.
+DETECTION_MAX_SIZE = 1600
+CARD_ASPECT = (1.15, 2.0)
+
 
 @dataclass(frozen=True)
 class Rectified:
@@ -17,6 +22,7 @@ class Rectified:
     found: bool
     corners: np.ndarray | None = None
     source_size: tuple[int, int] = (0, 0)
+    rotated: bool = False
 
 
 def rectify_file(path: Path) -> Rectified:
@@ -33,6 +39,13 @@ def rectify(image: np.ndarray) -> Rectified:
     if corners is None:
         return Rectified(image=image, found=False, source_size=source_size)
 
+    top = float(np.linalg.norm(corners[1] - corners[0]))
+    left = float(np.linalg.norm(corners[3] - corners[0]))
+    rotated = top > left
+    if rotated:
+        # The card is sideways in the frame; map its long edge to the height.
+        corners = corners[[1, 2, 3, 0]]
+
     destination = np.array(
         [[0, 0], [CARD_WIDTH - 1, 0], [CARD_WIDTH - 1, CARD_HEIGHT - 1], [0, CARD_HEIGHT - 1]],
         dtype=np.float32,
@@ -44,6 +57,7 @@ def rectify(image: np.ndarray) -> Rectified:
         found=True,
         corners=corners,
         source_size=source_size,
+        rotated=rotated,
     )
 
 
@@ -54,37 +68,57 @@ def write_image(path: Path, image: np.ndarray) -> None:
 
 
 def _find_card(image: np.ndarray) -> np.ndarray | None:
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    largest = max(image.shape[0], image.shape[1])
+    scale = min(1.0, DETECTION_MAX_SIZE / largest)
+    small = (
+        cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+        if scale < 1.0
+        else image
+    )
+    gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
     gray = cv2.GaussianBlur(gray, (5, 5), 0)
     frame_area = gray.shape[0] * gray.shape[1]
 
-    edges = cv2.Canny(gray, 50, 150)
+    edges = cv2.Canny(gray, 20, 60)
     edges = cv2.dilate(edges, np.ones((3, 3), np.uint8), iterations=1)
     contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
     best: np.ndarray | None = None
     best_area = 0.0
-    fallback: np.ndarray | None = None
-    fallback_area = 0.0
     for contour in contours:
         area = cv2.contourArea(contour)
-        if area < 0.1 * frame_area:
+        if area < 0.05 * frame_area or area <= best_area:
             continue
-        perimeter = cv2.arcLength(contour, True)
-        approx = cv2.approxPolyDP(contour, 0.02 * perimeter, True)
-        if len(approx) == 4 and area > best_area:
-            best = approx.reshape(4, 2).astype(np.float32)
-            best_area = area
-        elif area > fallback_area:
-            # Rounded corners and JPEG blur turn the card into 5+ vertices.
-            fallback = cv2.convexHull(contour).reshape(-1, 2).astype(np.float32)
-            fallback_area = area
+        quad = _quad_from_contour(contour)
+        if quad is None or not _plausible_card(quad):
+            continue
+        best = quad
+        best_area = area
 
-    if best is not None:
-        return _order_corners(best)
-    if fallback is not None:
-        return _order_corners(_quad_from_hull(fallback))
-    return None
+    if best is None:
+        return None
+    corners = _order_corners(best)
+    return corners / scale
+
+
+def _quad_from_contour(contour: np.ndarray) -> np.ndarray | None:
+    perimeter = cv2.arcLength(contour, True)
+    approx = cv2.approxPolyDP(contour, 0.02 * perimeter, True)
+    if len(approx) == 4:
+        return approx.reshape(4, 2).astype(np.float32)
+    hull = cv2.convexHull(contour).reshape(-1, 2).astype(np.float32)
+    if len(hull) < 3:
+        return None
+    # Rounded corners and JPEG blur turn the card into 5+ vertices.
+    return _quad_from_hull(hull)
+
+
+def _plausible_card(quad: np.ndarray) -> bool:
+    ordered = _order_corners(quad)
+    top = float(np.linalg.norm(ordered[1] - ordered[0]))
+    left = float(np.linalg.norm(ordered[3] - ordered[0]))
+    ratio = max(top, left) / max(min(top, left), 1e-6)
+    return CARD_ASPECT[0] <= ratio <= CARD_ASPECT[1]
 
 
 def _quad_from_hull(hull: np.ndarray) -> np.ndarray:

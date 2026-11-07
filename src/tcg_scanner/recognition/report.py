@@ -78,6 +78,8 @@ def build_report(
             "found": representative.rectified.found,
             "corners": _corners(representative.rectified),
             "size": [CARD_WIDTH, CARD_HEIGHT],
+            "rotated": representative.rectified.rotated,
+            "flipped": representative.flipped,
         },
         "preferences": {"language": preferred_language, "currency": preferred_currency},
         "status": "matched" if top is not None else "no_match",
@@ -99,6 +101,8 @@ def build_report(
                     else None
                 ),
                 "excluded": recognition.image in fused.excluded,
+                "rotated": recognition.rectified.rotated,
+                "flipped": recognition.flipped,
                 "warnings": recognition.warnings,
             }
             for recognition in fused.photos

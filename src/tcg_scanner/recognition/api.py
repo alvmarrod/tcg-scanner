@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import sqlite3
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
+
+import cv2
+import numpy as np
 
 from tcg_scanner.imaging.rectify import Rectified, rectify_file
 from tcg_scanner.recognition.embed import Embedder
@@ -23,6 +26,7 @@ class Recognition:
     search: SearchResult
     candidates: list[Candidate]
     warnings: list[dict[str, str]]
+    flipped: bool = False
 
 
 @dataclass(frozen=True)
@@ -64,7 +68,9 @@ class Recognizer:
 
     def recognize(self, image: Path) -> Recognition:
         rectified = rectify_file(image)
-        reading = self.reader.read(rectified.image)
+        upright, reading, flipped = _read_oriented(self.reader, rectified.image)
+        if flipped:
+            rectified = replace(rectified, image=upright)
         query, patches = self.embedder.embed_bgr(rectified.image)
         search = identify(
             self.conn,
@@ -87,7 +93,20 @@ class Recognizer:
             search=search,
             candidates=candidates,
             warnings=_recognition_warnings(rectified, reading, search),
+            flipped=flipped,
         )
+
+
+def _read_oriented(reader: CodeReader, image: np.ndarray) -> tuple[np.ndarray, CodeReading, bool]:
+    """Read the code, flipping 180 degrees if the upright crop has none."""
+    reading = reader.read(image)
+    if reading.code is not None:
+        return image, reading, False
+    flipped_image = cv2.rotate(image, cv2.ROTATE_180)
+    flipped_reading = reader.read(flipped_image)
+    if flipped_reading.code is not None:
+        return flipped_image, flipped_reading, True
+    return image, reading, False
 
 
 def fuse(recognitions: list[Recognition], *, top_k: int = 5) -> FusedRecognition:

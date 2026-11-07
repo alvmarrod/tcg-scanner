@@ -102,3 +102,27 @@ def test_fuse_breaks_an_ocr_tie_by_confidence():
 def test_fuse_rejects_an_empty_group():
     with pytest.raises(ValueError, match="empty group"):
         fuse([])
+
+
+def test_read_oriented_flips_when_the_upright_crop_has_no_code():
+    import cv2
+
+    from tcg_scanner.recognition.api import _read_oriented
+    from tcg_scanner.recognition.ocr import CodeReading
+
+    class FlipReader:
+        def __init__(self):
+            self.calls = 0
+
+        def read(self, image):
+            self.calls += 1
+            if self.calls == 1:
+                return CodeReading(code=None)
+            return CodeReading(code="OP15-001", confidence=0.9)
+
+    image = np.zeros((100, 60, 3), dtype=np.uint8)
+    upright, reading, flipped = _read_oriented(FlipReader(), image)
+
+    assert flipped is True
+    assert reading.code == "OP15-001"
+    assert np.array_equal(upright, cv2.rotate(image, cv2.ROTATE_180))

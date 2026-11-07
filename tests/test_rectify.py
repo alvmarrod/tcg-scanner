@@ -4,11 +4,16 @@ import numpy as np
 from tcg_scanner.imaging.rectify import CARD_HEIGHT, CARD_WIDTH, rectify
 
 
-def _card_photo() -> np.ndarray:
+def _card_image() -> np.ndarray:
     card = np.zeros((CARD_HEIGHT, CARD_WIDTH, 3), np.uint8)
     card[:] = (200, 180, 160)
     cv2.rectangle(card, (10, 10), (CARD_WIDTH - 10, CARD_HEIGHT - 10), (255, 255, 255), 6)
     cv2.putText(card, "CARD", (150, 450), cv2.FONT_HERSHEY_SIMPLEX, 4, (30, 30, 30), 8)
+    return card
+
+
+def _card_photo() -> np.ndarray:
+    card = _card_image()
 
     canvas = np.full((1200, 900, 3), 40, np.uint8)
     source = np.float32(
@@ -51,4 +56,16 @@ def test_rectify_handles_a_contour_with_more_than_four_vertices():
     result = rectify(canvas)
 
     assert result.found
+    assert result.image.shape == (CARD_HEIGHT, CARD_WIDTH, 3)
+
+
+def test_rectify_rotates_a_sideways_card():
+    sideways = cv2.rotate(_card_image(), cv2.ROTATE_90_CLOCKWISE)
+    canvas = np.full((900, 1200, 3), 40, np.uint8)
+    canvas[150 : 150 + sideways.shape[0], 180 : 180 + sideways.shape[1]] = sideways
+
+    result = rectify(canvas)
+
+    assert result.found
+    assert result.rotated
     assert result.image.shape == (CARD_HEIGHT, CARD_WIDTH, 3)
