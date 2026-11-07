@@ -216,11 +216,11 @@
     </div>
 
     <div class="detail-top">
-      <figure class="detail-photo">
+      <figure class="detail-photo detail-input">
         <img src={summary.input_url} alt="input photo" />
         <figcaption class="muted">input · {report.photos.length} photo{report.photos.length === 1 ? '' : 's'}</figcaption>
       </figure>
-      <figure class="detail-photo">
+      <figure class="detail-photo detail-reference">
         {#if summary.reference_url}
           <img src={summary.reference_url} alt="catalog reference" />
           <figcaption class="muted">reference · {summary.reference_language ?? 'unknown'}</figcaption>
@@ -257,6 +257,77 @@
           </ol>
         </div>
       </aside>
+
+      <div class="detail-review">
+        <div class="panel review-panel">
+          <div class="review-head">
+            <h2>Review</h2>
+            {#if review?.stale}
+              <span class="warn-text">this review refers to an older prediction</span>
+            {/if}
+          </div>
+          <div class="review-actions">
+            <button
+              class="pill ok"
+              class:active={review?.status === 'right'}
+              disabled={!isLatest || saving}
+              onclick={() => saveStatus('right')}
+            >✓ right</button>
+            <button
+              class="pill bad"
+              class:active={review?.status === 'wrong'}
+              disabled={!isLatest || saving}
+              onclick={() => saveStatus('wrong')}
+            >✗ wrong</button>
+            {#if review}
+              <button class="ghost" disabled={!isLatest || saving} onclick={clearWrong}>clear wrong</button>
+              <button class="ghost" disabled={!isLatest || saving} onclick={clearExpansion}>clear expansion</button>
+            {/if}
+          </div>
+
+          <div class="review-fields">
+            <label>correct expansion
+              <input
+                list="expansions"
+                bind:value={expansion}
+                placeholder="OP15"
+                disabled={!isLatest || saving}
+                onchange={() => { if (expansion) saveDetails() }}
+              />
+            </label>
+            <label>note
+              <input bind:value={note} placeholder="optional" disabled={!isLatest || saving} />
+            </label>
+            <button class="ghost" disabled={!isLatest || saving} onclick={saveDetails}>save details</button>
+          </div>
+          <datalist id="expansions">
+            {#each expansions as value}<option value={value}></option>{/each}
+          </datalist>
+          {#if !isLatest}<p class="version-note">Select the latest version to edit its review.</p>{/if}
+          {#if reviewError}<p class="error">{reviewError}</p>{/if}
+        </div>
+
+        <div class="panel retry-row">
+          <button
+            class="ghost"
+            disabled={!canRetry || retrying || !capabilities.retry}
+            onclick={retry}
+            title={!capabilities.retry ? 'recognition extra is not installed' : !canRetry ? 'needs a wrong review with an expansion' : ''}
+          >
+            retry within {review?.expansion ?? 'expansion'}
+          </button>
+          {#if !capabilities.retry}
+            <span class="version-note">retry is disabled: the recognition extra is not installed on the server</span>
+          {/if}
+          {#if job}
+            <div class="progress" style="flex:1">
+              <div class="progress-bar" style={`width:${job.total ? (job.completed / job.total) * 100 : 0}%`}></div>
+              <span>{job.completed}/{job.total}{job.state === 'failed' ? ' · failed' : ''}</span>
+            </div>
+          {/if}
+          {#if jobError}<p class="error">{jobError}</p>{/if}
+        </div>
+      </div>
     </div>
 
     <div class="nav-row">
@@ -272,75 +343,6 @@
         {/each}
       </ul>
     {/if}
-
-    <div class="panel review-panel">
-      <div class="review-head">
-        <h2>Review</h2>
-        {#if review?.stale}
-          <span class="warn-text">this review refers to an older prediction</span>
-        {/if}
-      </div>
-      <div class="review-actions">
-        <button
-          class="pill ok"
-          class:active={review?.status === 'right'}
-          disabled={!isLatest || saving}
-          onclick={() => saveStatus('right')}
-        >✓ right</button>
-        <button
-          class="pill bad"
-          class:active={review?.status === 'wrong'}
-          disabled={!isLatest || saving}
-          onclick={() => saveStatus('wrong')}
-        >✗ wrong</button>
-        {#if review}
-          <button class="ghost" disabled={!isLatest || saving} onclick={clearWrong}>clear wrong</button>
-          <button class="ghost" disabled={!isLatest || saving} onclick={clearExpansion}>clear expansion</button>
-        {/if}
-      </div>
-
-      <div class="review-fields">
-        <label>correct expansion
-          <input
-            list="expansions"
-            bind:value={expansion}
-            placeholder="OP15"
-            disabled={!isLatest || saving}
-            onchange={() => { if (expansion) saveDetails() }}
-          />
-        </label>
-        <label>note
-          <input bind:value={note} placeholder="optional" disabled={!isLatest || saving} />
-        </label>
-        <button class="ghost" disabled={!isLatest || saving} onclick={saveDetails}>save details</button>
-      </div>
-      <datalist id="expansions">
-        {#each expansions as value}<option value={value}></option>{/each}
-      </datalist>
-      {#if !isLatest}<p class="version-note">Select the latest version to edit its review.</p>{/if}
-      {#if reviewError}<p class="error">{reviewError}</p>{/if}
-    </div>
-
-    <div class="panel retry-row">
-      <button
-        class="ghost"
-        disabled={!canRetry || retrying || !capabilities.retry}
-        onclick={retry}
-        title={!capabilities.retry ? 'recognition extra is not installed' : !canRetry ? 'needs a wrong review with an expansion' : ''}
-      >
-        retry within {review?.expansion ?? 'expansion'}
-      </button>
-      {#if !capabilities.retry}
-        <span class="version-note">retry is disabled: the recognition extra is not installed on the server</span>
-      {/if}
-      {#if job}
-        <div class="progress" style="flex:1">
-          <div class="progress-bar" style={`width:${job.total ? (job.completed / job.total) * 100 : 0}%`}></div>
-          <span>{job.completed}/{job.total}{job.state === 'failed' ? ' · failed' : ''}</span>
-        </div>
-      {/if}
-      {#if jobError}<p class="error">{jobError}</p>{/if}
-    </div>
 
     <details class="raw">
       <summary class="muted">raw result JSON</summary>
