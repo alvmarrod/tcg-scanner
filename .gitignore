@@ -224,3 +224,6 @@ models/
 *.pt
 *.pth
 *.safetensors
+
+# Frontend
+node_modules/

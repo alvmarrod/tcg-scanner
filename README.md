@@ -80,6 +80,7 @@ uv run tcg-scanner inspect path/to/photo.jpg
 uv run tcg-scanner identify path/to/photo.jpg          # JSON
 uv run tcg-scanner identify --text path/to/photo.jpg   # human table
 uv run tcg-scanner batch
+uv run tcg-scanner serve
 uv run tcg-scanner samples list
 uv run tcg-scanner samples add photo.jpg OP15-001 0
 uv run tcg-scanner matches list
@@ -130,8 +131,9 @@ never silent.
 are one card each (`card-001/front.jpg`, `card-001/back.jpg`); loose images become
 single-photo cards. Each group is fused (best score per printing, OCR majority,
 outlier photos excluded with a warning) and written as one JSON report to
-`data/output/<group>.json`. Nothing is written to `library.db`. A broken file does not
-stop the run; the command exits 1 if any file failed.
+`data/output/<input-folder>/<group>.json`, alongside a `run.json` manifest. Nothing is
+written to `library.db`. A broken file does not stop the run; the command exits 1 if
+any file failed.
 
 Confirmed photos can be kept as recognition samples: `samples add <image> <card_code>
 <print_index>` stores the rectified image under `data/samples/<code>/<index>/`, tagged
@@ -155,18 +157,39 @@ no longer resolves.
 accuracy, OCR rates, the top-1 score distribution for correct vs. wrong matches, and
 the misses. `--json` emits the same report as JSON.
 
+## Results website
+
+`tcg-scanner serve` starts a local, read-only results browser (default
+`http://127.0.0.1:9876`; `--host` and `--port` are configurable). Each folder under
+`data/output/` is a run. The run page shows an album of input photos with their matched
+reference image; clicking a tile opens a side-by-side comparison with OCR, candidates,
+prices and warnings, plus previous/next navigation. Dark theme by default, light theme
+available. It serves the FastAPI API and the built Svelte UI, and never writes to the
+databases.
+
+The UI source lives in `src/tcg_scanner/web/ui`; the built assets in `ui_build` are
+committed so the tool works without Node. Rebuild after UI changes:
+
+```sh
+cd src/tcg_scanner/web/ui
+npm install
+npm run build
+```
+
+Uploading or triggering a scan from the browser is not implemented yet.
+
 ## Development
 
 Requires [uv](https://docs.astral.sh/uv/). The virtualenv and Python version are
 managed per-repo.
 
 ```sh
-uv sync --extra recognition  # .venv + dependencies (including torch)
+uv sync --extra recognition --extra web
 uv run pre-commit install    # git hooks
 ```
 
-`uv sync` alone installs everything except the model stack; `index`, `inspect`,
-`identify` and `eval` then exit with a message telling you to add the extra.
+`uv sync` alone installs everything except the model stack and the web server;
+`index`, `inspect`, `identify`, `eval` and `serve` then tell you which extra to add.
 
 ```sh
 uv run pre-commit run --all-files
@@ -177,7 +200,7 @@ uv run pytest
 ## Install as a tool
 
 ```sh
-uv tool install ".[recognition]"
+uv tool install ".[recognition,web]"
 tcg-scanner --help
 ```
 
@@ -188,6 +211,7 @@ Layout:
 
 ```
 src/tcg_scanner/   package
+  web/             FastAPI API + built Svelte UI
 docs/              design notes
 data/              local only, git-ignored
   input/           photos to process

@@ -138,6 +138,10 @@ def build_parser() -> argparse.ArgumentParser:
     batch.add_argument("--top", type=int, default=5, metavar="N")
     batch.add_argument("--prefer", choices=["jp", "en"], default="jp")
 
+    serve = commands.add_parser("serve", help="serve the results website")
+    serve.add_argument("--host", default="127.0.0.1")
+    serve.add_argument("--port", type=int, default=9876)
+
     evaluation = commands.add_parser("eval", help="score recognition against labeled photos")
     evaluation.add_argument(
         "labels", type=Path, nargs="?", default=None, metavar="CSV", help="labels CSV"
@@ -170,6 +174,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         ("samples", "list"): _samples_list,
         ("samples", "remove"): _samples_remove,
         ("batch", None): _batch,
+        ("serve", None): _serve,
         ("eval", None): _evaluate,
     }
     handler = handlers.get((args.command, getattr(args, f"{args.command}_command", None)))
@@ -475,6 +480,7 @@ def _batch(args: argparse.Namespace) -> int:
     _require_recognition("easyocr", "timm")
 
     import json
+    from datetime import UTC, datetime
 
     from tcg_scanner.batch import discover_groups, result_path
     from tcg_scanner.recognition.api import Recognizer, fuse
@@ -486,11 +492,12 @@ def _batch(args: argparse.Namespace) -> int:
         print(f"no images in {input_dir}")
         return 0
 
-    output_dir = config.output_dir()
+    output_dir = config.output_dir() / input_dir.resolve().name
     output_dir.mkdir(parents=True, exist_ok=True)
     init_catalog(config.catalog_db())
 
     matched = no_match = failed = 0
+    created_at = datetime.now(UTC).isoformat(timespec="seconds")
     conn = open_catalog(config.catalog_db())
     try:
         recognizer = Recognizer(conn, prefer=args.prefer, top_k=args.top)
@@ -533,8 +540,25 @@ def _batch(args: argparse.Namespace) -> int:
     finally:
         conn.close()
 
+    (output_dir / "run.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "name": output_dir.name,
+                "input": str(input_dir),
+                "created_at": created_at,
+                "photos": sum(len(group.images) for group in groups),
+                "groups": len(groups),
+                "model": recognizer.embedder.model_name,
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     print(
-        f"{matched} matched, {no_match} no match, {failed} failed photos; results in {output_dir}"
+        f"{matched} matched, {no_match} no match, {failed} failed photos; "
+        f"run {output_dir.name} in {output_dir}"
     )
     return 0 if failed == 0 else 1
 
@@ -749,6 +773,19 @@ def _owned_list(args: argparse.Namespace) -> int:
     currency = next((row["currency"] for row in rows if row["currency"]), "")
     suffix = f" ({unpriced} rows without price)" if unpriced else ""
     print(f"total: {total:.2f} {currency}{suffix}".rstrip())
+    return 0
+
+
+def _serve(args: argparse.Namespace) -> int:
+    try:
+        import uvicorn
+
+        from tcg_scanner.web.app import create_app
+    except ImportError:
+        print("the web extra is missing: run `uv sync --extra web`", file=sys.stderr)
+        return 1
+
+    uvicorn.run(create_app(), host=args.host, port=args.port, log_level="info")
     return 0
 
 

@@ -25,5 +25,7 @@ Legend: ⬜ not started · ✅ done
 20. ✅ **[I] Scale and performance** — index rebuild and `load_index` at full catalog size (~10k printings), DB growth, batching.
 
 21. ✅ **[I] Confirmed-sample feedback loop** — `samples add/list/remove`, user photos stored under their own origin and excluded from matching/eval by default.
+22. ✅ **[I] Read-only results website** — FastAPI API, Svelte album per run, side-by-side input/reference detail.
+23. ⬜ **[I] Web-triggered recognition** — upload or select photos from the browser and start a scan.
 
 Tags: **[D]** data · **[Dsn]** design decision · **[I]** implementation.

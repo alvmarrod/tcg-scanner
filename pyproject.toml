@@ -23,6 +23,10 @@ recognition = [
     "torch>=2.15.0",
     "torchvision>=0.29.2",
 ]
+web = [
+    "fastapi>=0.162.0",
+    "uvicorn>=0.54.0",
+]
 
 [project.scripts]
 tcg-scanner = "tcg_scanner:main"
