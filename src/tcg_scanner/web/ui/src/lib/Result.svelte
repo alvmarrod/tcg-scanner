@@ -215,12 +215,12 @@
       {/if}
     </div>
 
-    <div class="compare">
-      <figure>
+    <div class="detail-top">
+      <figure class="detail-photo">
         <img src={summary.input_url} alt="input photo" />
         <figcaption class="muted">input · {report.photos.length} photo{report.photos.length === 1 ? '' : 's'}</figcaption>
       </figure>
-      <figure>
+      <figure class="detail-photo">
         {#if summary.reference_url}
           <img src={summary.reference_url} alt="catalog reference" />
           <figcaption class="muted">reference · {summary.reference_language ?? 'unknown'}</figcaption>
@@ -229,6 +229,34 @@
           <figcaption class="muted">reference</figcaption>
         {/if}
       </figure>
+      <aside class="detail-side">
+        <div class="panel">
+          <h2>Match</h2>
+          <dl>
+            <dt>estate</dt><dd class="estate {estateClass}">{estate}{review?.expansion ? ` · ${review.expansion}` : ''}</dd>
+            <dt>score</dt><dd>{summary.score !== null ? summary.score.toFixed(3) : '—'}</dd>
+            <dt>patch</dt><dd>{summary.patch_score !== null ? summary.patch_score.toFixed(3) : '—'}</dd>
+            <dt>margin</dt><dd>{summary.margin !== null ? summary.margin.toFixed(3) : '—'}</dd>
+            <dt>set</dt><dd>{summary.set_code ?? '—'}</dd>
+            <dt>variant</dt><dd>{summary.variant_label ?? '—'}</dd>
+            <dt>OCR</dt><dd>{summary.ocr_code ?? 'unreadable'}</dd>
+            <dt>reference</dt><dd>{summary.reference_language ?? '—'}</dd>
+            <dt>EUR</dt><dd>{report.prices?.eur ?? '—'}</dd>
+            <dt>USD</dt><dd>{report.prices?.usd ?? '—'}</dd>
+          </dl>
+        </div>
+        <div class="panel">
+          <h2>Candidates</h2>
+          <ol class="candidates">
+            {#each report.candidates as candidate}
+              <li>
+                <span>{candidate.card_code} #{candidate.print_index}</span>
+                <span class="muted">{candidate.score.toFixed(3)}</span>
+              </li>
+            {/each}
+          </ol>
+        </div>
+      </aside>
     </div>
 
     <div class="nav-row">
@@ -244,40 +272,6 @@
         {/each}
       </ul>
     {/if}
-
-    <div class="panels">
-      <div class="panel">
-        <h2>Match</h2>
-        <dl>
-          <dt>estate</dt><dd class="estate {estateClass}">{estate}{review?.expansion ? ` · ${review.expansion}` : ''}</dd>
-          <dt>score</dt><dd>{summary.score !== null ? summary.score.toFixed(3) : '—'}</dd>
-          <dt>patch</dt><dd>{summary.patch_score !== null ? summary.patch_score.toFixed(3) : '—'}</dd>
-          <dt>margin</dt><dd>{summary.margin !== null ? summary.margin.toFixed(3) : '—'}</dd>
-          <dt>set</dt><dd>{summary.set_code ?? '—'}</dd>
-          <dt>variant</dt><dd>{summary.variant_label ?? '—'}</dd>
-          <dt>OCR</dt><dd>{summary.ocr_code ?? 'unreadable'}</dd>
-          <dt>reference</dt><dd>{summary.reference_language ?? '—'}</dd>
-        </dl>
-      </div>
-      <div class="panel">
-        <h2>Candidates</h2>
-        <ol class="candidates">
-          {#each report.candidates as candidate}
-            <li>
-              <span>{candidate.card_code} #{candidate.print_index}</span>
-              <span class="muted">{candidate.score.toFixed(3)}</span>
-            </li>
-          {/each}
-        </ol>
-      </div>
-      <div class="panel">
-        <h2>Prices</h2>
-        <dl>
-          <dt>EUR</dt><dd>{report.prices?.eur ?? '—'}</dd>
-          <dt>USD</dt><dd>{report.prices?.usd ?? '—'}</dd>
-        </dl>
-      </div>
-    </div>
 
     <div class="panel review-panel">
       <div class="review-head">
