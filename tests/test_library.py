@@ -451,3 +451,60 @@ def test_reviews_reject_an_unknown_status(tmp_path):
             set_review(conn, run="r", result_group="a", status="maybe")
     finally:
         conn.close()
+
+
+def test_reviews_are_per_iteration(tmp_path):
+    conn = _library(tmp_path, _catalog(tmp_path))
+    try:
+        set_review(
+            conn,
+            run="r",
+            result_group="a",
+            iteration=0,
+            status="wrong",
+            expansion="OP15",
+            predicted_card_code="OP08-001",
+        )
+        set_review(
+            conn,
+            run="r",
+            result_group="a",
+            iteration=1,
+            status="right",
+            predicted_card_code="OP15-001",
+        )
+
+        first = get_review(conn, "r", "a", 0)
+        second = get_review(conn, "r", "a", 1)
+        assert first["status"] == "wrong"
+        assert second["status"] == "right"
+
+        stats = review_stats(conn, latest={("r", "a"): 1})
+        assert stats["reviewed"] == 1
+        assert stats["right"] == 1
+    finally:
+        conn.close()
+
+
+def test_unmarked_keeps_the_expansion_hint(tmp_path):
+    conn = _library(tmp_path, _catalog(tmp_path))
+    try:
+        set_review(
+            conn,
+            run="r",
+            result_group="a",
+            iteration=0,
+            status="unmarked",
+            expansion="OP15",
+            predicted_card_code="OP08-001",
+        )
+
+        row = get_review(conn, "r", "a", 0)
+        assert row["status"] == "unmarked"
+        assert row["expansion"] == "OP15"
+
+        stats = review_stats(conn)
+        assert stats["reviewed"] == 0
+        assert stats["unmarked"] == 1
+    finally:
+        conn.close()

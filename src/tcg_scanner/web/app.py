@@ -12,28 +12,30 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from tcg_scanner import config
+from tcg_scanner import config, results
 from tcg_scanner.db import init_library, open_library
-from tcg_scanner.db.library import (
-    clear_review,
-    list_reviews,
-    set_review,
-)
+from tcg_scanner.db.library import clear_review, list_reviews, set_review
+from tcg_scanner.web.jobs import JobBusy, RetryManager, recognition_available
 
 THUMBNAIL_SIZE = (520, 520)
 UI_DIR = Path(__file__).parent / "ui_build"
 
 
 class ReviewInput(BaseModel):
-    status: Literal["right", "wrong"]
+    status: Literal["right", "wrong", "unmarked"]
     expansion: str | None = None
     note: str | None = None
+
+
+class RetryInput(BaseModel):
+    groups: list[str]
 
 
 def create_app(data_dir: Path | None = None) -> FastAPI:
     root = (data_dir or config.data_dir()).resolve()
     library_path = root / "db" / "library.db"
     init_library(library_path)
+    retry_manager = RetryManager(root)
     app = FastAPI(
         title="tcg-scanner results", docs_url="/api/docs", openapi_url="/api/openapi.json"
     )
@@ -49,22 +51,33 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="unknown run")
         return directory
 
-    def report_path(run: str, group: str) -> Path:
+    def chosen_report(run: str, group: str, iteration: int | None = None) -> tuple[int, int, dict]:
         if Path(group).name != group:
             raise HTTPException(status_code=404, detail="unknown result")
-        path = run_directory(run) / f"{group}.json"
-        if not path.is_file():
+        versions = results.versions(run_directory(run)).get(group)
+        if not versions:
             raise HTTPException(status_code=404, detail="unknown result")
-        return path
-
-    def load_report(run: str, group: str) -> dict:
+        latest = max(versions)
+        chosen = latest if iteration is None else iteration
+        if chosen not in versions:
+            raise HTTPException(status_code=404, detail="unknown iteration")
         try:
-            report = json.loads(report_path(run, group).read_text(encoding="utf-8"))
+            report = results.load(versions[chosen])
         except (OSError, json.JSONDecodeError) as error:
             raise HTTPException(status_code=500, detail=f"unreadable result: {error}") from error
         if report.get("schema_version", 0) < 2:
             raise HTTPException(status_code=404, detail="unsupported result schema")
-        return report
+        return chosen, latest, report
+
+    def reviews_for(run: str) -> dict[tuple[str, int], sqlite3.Row]:
+        connection = open_library(library_path)
+        try:
+            return {
+                (row["result_group"], row["iteration"]): row
+                for row in list_reviews(connection, run=run)
+            }
+        finally:
+            connection.close()
 
     def data_file(raw: str) -> Path:
         candidate = Path(raw)
@@ -144,14 +157,7 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
                 temporary.replace(target)
         return target
 
-    def reviews_for(run: str) -> dict[str, sqlite3.Row]:
-        connection = open_library(library_path)
-        try:
-            return {row["result_group"]: row for row in list_reviews(connection, run=run)}
-        finally:
-            connection.close()
-
-    def review_payload(result: dict, row: sqlite3.Row | None) -> dict:
+    def review_payload(result: dict, row: sqlite3.Row | None) -> dict | None:
         if row is None:
             return None
         stale = (
@@ -159,6 +165,7 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
             or result.get("print_index") != row["predicted_print_index"]
         )
         return {
+            "iteration": row["iteration"],
             "status": row["status"],
             "expansion": row["expansion"],
             "note": row["note"],
@@ -166,18 +173,32 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
             "stale": stale,
         }
 
-    def summary(run: str, group: str, report: dict) -> dict:
+    def summary(
+        run: str,
+        group: str,
+        report: dict,
+        iteration: int,
+        latest: int,
+        review: sqlite3.Row | None,
+    ) -> dict:
         detection = (report.get("detections") or [None])[0]
-        base = f"/api/runs/{quote(run, safe='')}/results/{quote(group, safe='')}"
         rotation = report.get("rectification", {}).get("rotation", 0) or 0
-        input_url = f"{base}/input"
-        input_thumb = f"{base}/input?thumb=1"
+        base = f"/api/runs/{quote(run, safe='')}/results/{quote(group, safe='')}"
+        query = f"iteration={iteration}"
+        input_url = f"{base}/input?{query}"
+        input_thumb = f"{base}/input?{query}&thumb=1"
         if rotation:
-            input_url += f"?rotate={rotation}"
+            input_url += f"&rotate={rotation}"
             input_thumb += f"&rotate={rotation}"
+
         result = {
             "run": run,
             "group": report.get("group") or group,
+            "iteration": iteration,
+            "latest_iteration": latest,
+            "is_latest": iteration == latest,
+            "version": report.get("version")
+            or {"iteration": iteration, "kind": "batch", "hint": None},
             "status": report.get("status"),
             "score": None,
             "patch_score": None,
@@ -194,8 +215,8 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
             "input_url": input_url,
             "input_thumb": input_thumb,
             "input_rotation": rotation,
-            "reference_url": None,
-            "reference_thumb": None,
+            "reference_url": f"{base}/reference?{query}",
+            "reference_thumb": f"{base}/reference?{query}&thumb=1",
             "review": None,
             "price": None,
             "price_eur": None,
@@ -223,11 +244,10 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
                     "variant_label": detection.get("card", {}).get("variant_label"),
                     "reference_language": detection.get("reference", {}).get("language"),
                     "ocr_code": detection.get("ocr", {}).get("code"),
-                    "reference_url": f"{base}/reference",
-                    "reference_thumb": f"{base}/reference?thumb=1",
                     "expansion": detection["card_code"].split("-")[0],
                 }
             )
+        result["review"] = review_payload(result, review)
         return result
 
     def load_run(name: str) -> dict:
@@ -240,34 +260,36 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
             except OSError, json.JSONDecodeError:
                 metadata = {}
 
+        batches = metadata.get("batches") or []
+        latest_batch = batches[-1] if batches else metadata
         reviews = reviews_for(name)
-        results = []
-        for path in sorted(directory.glob("*.json")):
-            if path.name == "run.json":
-                continue
-            try:
-                report = json.loads(path.read_text(encoding="utf-8"))
-            except OSError, json.JSONDecodeError:
-                continue
-            if report.get("schema_version", 0) < 2:
-                continue
-            result = summary(name, path.stem, report)
-            result["review"] = review_payload(result, reviews.get(path.stem))
-            results.append(result)
+        version_map = results.versions(directory)
+        summaries = []
+        for group, iterations in sorted(version_map.items()):
+            latest = max(iterations)
+            report = results.load(iterations[latest])
+            summaries.append(
+                summary(name, group, report, latest, latest, reviews.get((group, latest)))
+            )
 
         return {
             "name": name,
-            "created_at": metadata.get("created_at"),
-            "input": metadata.get("input"),
-            "model": metadata.get("model"),
-            "photos": metadata.get("photos", sum(result["photos"] for result in results)),
-            "groups": len(results),
-            "results": results,
+            "created_at": latest_batch.get("created_at"),
+            "input": latest_batch.get("input"),
+            "model": latest_batch.get("model"),
+            "batches": batches,
+            "photos": sum(item["photos"] for item in summaries),
+            "groups": len(summaries),
+            "results": summaries,
         }
 
     @app.get("/api/health")
     def health() -> dict:
         return {"ok": True}
+
+    @app.get("/api/capabilities")
+    def capabilities() -> dict:
+        return {"retry": recognition_available()}
 
     @app.get("/api/runs")
     def runs() -> dict:
@@ -289,6 +311,7 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
                     "input": run["input"],
                     "photos": run["photos"],
                     "groups": run["groups"],
+                    "batches": len(run["batches"]),
                 }
             )
         return {"runs": summaries}
@@ -298,28 +321,39 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
         return load_run(run)
 
     @app.get("/api/runs/{run}/results/{group}")
-    def result_detail(run: str, group: str) -> dict:
-        report = load_report(run, group)
-        return {"summary": summary(run, group, report), "report": report}
-
-    @app.get("/api/runs/{run}/results/{group}/input")
-    def input_image(
-        run: str,
-        group: str,
-        thumb: bool = Query(default=False),
-        rotate: int = Query(default=0),
-    ) -> FileResponse:
-        report = load_report(run, group)
-        image_path = report.get("image", {}).get("path")
-        if not image_path:
-            raise HTTPException(status_code=404, detail="no input image")
-        source = data_file(image_path)
-        return _file_response(rendered(source, rotate=rotate, thumb=thumb))
+    def result_detail(run: str, group: str, iteration: int | None = Query(default=None)) -> dict:
+        chosen, latest, report = chosen_report(run, group, iteration)
+        reviews = reviews_for(run)
+        versions = results.versions(run_directory(run))[group]
+        history = [
+            summary(
+                run,
+                group,
+                results.load(versions[number]),
+                number,
+                latest,
+                reviews.get((group, number)),
+            )
+            for number in sorted(versions)
+        ]
+        return {
+            "iteration": chosen,
+            "latest_iteration": latest,
+            "history": history,
+            "summary": history[[item["iteration"] for item in history].index(chosen)],
+            "report": report,
+        }
 
     @app.put("/api/runs/{run}/results/{group}/review")
-    def put_review(run: str, group: str, payload: ReviewInput) -> dict:
-        report = load_report(run, group)
-        summary_data = summary(run, group, report)
+    def put_review(
+        run: str,
+        group: str,
+        payload: ReviewInput,
+        iteration: int | None = Query(default=None),
+    ) -> dict | None:
+        chosen, latest, report = chosen_report(run, group, iteration)
+        if chosen != latest:
+            raise HTTPException(status_code=409, detail="older iterations are read-only")
         detection = (report.get("detections") or [None])[0]
         connection = open_library(library_path)
         try:
@@ -327,6 +361,7 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
                 connection,
                 run=run,
                 result_group=group,
+                iteration=chosen,
                 status=payload.status,
                 expansion=payload.expansion,
                 predicted_card_code=(detection["card_code"] if detection is not None else None),
@@ -336,44 +371,49 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
             )
         finally:
             connection.close()
-        return review_payload(summary_data, row)
+        if row is None:
+            return None
+        result = summary(run, group, report, chosen, latest, row)
+        return result["review"]
 
     @app.delete("/api/runs/{run}/results/{group}/review")
-    def delete_review(run: str, group: str) -> dict:
-        load_report(run, group)
+    def delete_review(run: str, group: str, iteration: int | None = Query(default=None)) -> dict:
+        chosen, latest, _report = chosen_report(run, group, iteration)
+        if chosen != latest:
+            raise HTTPException(status_code=409, detail="older iterations are read-only")
         connection = open_library(library_path)
         try:
-            removed = clear_review(connection, run, group)
+            removed = clear_review(connection, run, group, chosen)
         finally:
             connection.close()
         return {"removed": removed}
 
     @app.get("/api/runs/{run}/stats")
     def run_stats(run: str) -> dict:
-        results = load_run(run)["results"]
-        reviewed = [result for result in results if result["review"]]
-        right = sum(1 for result in reviewed if result["review"]["status"] == "right")
-        wrong = len(reviewed) - right
-
+        result_list = load_run(run)["results"]
+        reviewed = [item for item in result_list if item["review"]]
+        right = sum(1 for item in reviewed if item["review"]["status"] == "right")
+        wrong = sum(1 for item in reviewed if item["review"]["status"] == "wrong")
         by_expansion: dict[str, dict[str, int]] = {}
         claimed: dict[str, int] = {}
-        for result in results:
-            review = result["review"]
-            if review is None:
+        for item in reviewed:
+            status = item["review"]["status"]
+            if status == "unmarked":
                 continue
-            expansion = (result["card_code"] or "unknown").split("-")[0]
+            expansion = (item["card_code"] or "unknown").split("-")[0]
             bucket = by_expansion.setdefault(expansion, {"right": 0, "wrong": 0})
-            bucket[review["status"]] += 1
-            if review["status"] == "wrong" and review["expansion"]:
-                claimed[review["expansion"]] = claimed.get(review["expansion"], 0) + 1
-
+            bucket[status] += 1
+            if status == "wrong" and item["review"]["expansion"]:
+                claimed[item["review"]["expansion"]] = (
+                    claimed.get(item["review"]["expansion"], 0) + 1
+                )
         return {
-            "total": len(results),
-            "reviewed": len(reviewed),
-            "unmarked": len(results) - len(reviewed),
+            "total": len(result_list),
+            "reviewed": right + wrong,
+            "unmarked": len(result_list) - (right + wrong),
             "right": right,
             "wrong": wrong,
-            "accuracy": right / len(reviewed) if reviewed else None,
+            "accuracy": right / (right + wrong) if (right + wrong) else None,
             "by_expansion": dict(sorted(by_expansion.items())),
             "claimed_expansion": dict(sorted(claimed.items())),
         }
@@ -393,9 +433,69 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
             connection.close()
         return {"expansions": [row[0] for row in rows if row[0]]}
 
+    @app.post("/api/runs/{run}/retry")
+    def start_retry(run: str, payload: RetryInput) -> dict:
+        if not recognition_available():
+            raise HTTPException(
+                status_code=503,
+                detail="retry needs the recognition extra: uv sync --extra recognition",
+            )
+        run_directory(run)
+        eligible = []
+        problems = []
+        for group in payload.groups:
+            try:
+                iteration, _latest, _report = chosen_report(run, group)
+            except HTTPException:
+                problems.append({"group": group, "error": "unknown result"})
+                continue
+            reviews = reviews_for(run)
+            review = reviews.get((group, iteration))
+            if review is None or review["status"] != "wrong" or not review["expansion"]:
+                problems.append({"group": group, "error": "needs a wrong review with an expansion"})
+                continue
+            eligible.append(group)
+        if not eligible:
+            raise HTTPException(
+                status_code=400,
+                detail={"message": "no eligible results", "problems": problems},
+            )
+        try:
+            job_id = retry_manager.start(run, eligible)
+        except JobBusy as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return {"job_id": job_id, "groups": eligible, "problems": problems}
+
+    @app.get("/api/jobs/{job_id}")
+    def job_status(job_id: str) -> dict:
+        job = retry_manager.status(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="unknown job")
+        return job
+
+    @app.get("/api/runs/{run}/results/{group}/input")
+    def input_image(
+        run: str,
+        group: str,
+        thumb: bool = Query(default=False),
+        rotate: int = Query(default=0),
+        iteration: int | None = Query(default=None),
+    ) -> FileResponse:
+        _chosen, _latest, report = chosen_report(run, group, iteration)
+        image_path = report.get("image", {}).get("path")
+        if not image_path:
+            raise HTTPException(status_code=404, detail="no input image")
+        source = data_file(image_path)
+        return _file_response(rendered(source, rotate=rotate, thumb=thumb))
+
     @app.get("/api/runs/{run}/results/{group}/reference")
-    def reference_image(run: str, group: str, thumb: bool = Query(default=False)) -> FileResponse:
-        report = load_report(run, group)
+    def reference_image(
+        run: str,
+        group: str,
+        thumb: bool = Query(default=False),
+        iteration: int | None = Query(default=None),
+    ) -> FileResponse:
+        _chosen, _latest, report = chosen_report(run, group, iteration)
         source = reference_file(report)
         return _file_response(rendered(source, thumb=thumb))
 

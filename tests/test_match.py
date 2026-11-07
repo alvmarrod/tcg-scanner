@@ -196,3 +196,18 @@ def test_identify_reports_the_used_code(tmp_path):
         assert result.candidates[0].card_code == "OP08-001"
     finally:
         conn.close()
+
+
+def test_rank_filters_by_expansion():
+    index = ReferenceIndex(
+        vectors=np.array([[1.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=np.float32),
+        key_ids=np.array([0, 1]),
+        keys=[("OP08-001", 0), ("OP15-001", 0)],
+        card_codes=["OP08-001", "OP15-001"],
+        languages=["jp", "jp"],
+    )
+
+    ranked = rank(index, np.array([1.0, 0.0, 0.0], dtype=np.float32), expansion="OP15")
+
+    assert [key for key, _score, _language in ranked] == [("OP15-001", 0)]
+    assert rank(index, np.zeros(3, dtype=np.float32), expansion="EB01") == []

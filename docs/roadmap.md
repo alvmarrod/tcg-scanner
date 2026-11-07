@@ -28,6 +28,7 @@ Legend: ⬜ not started · ✅ done
 22. ✅ **[I] Read-only results website** — FastAPI API, Svelte album per run, side-by-side input/reference detail.
 23. ⬜ **[I] Web-triggered recognition** — upload or select photos from the browser and start a scan.
 24. ✅ **[I] Result feedback** — right/wrong flags, optional claimed expansion, accuracy stats in API/UI/CLI.
-25. ⬜ **[I] Constrained retry** — re-check a wrong result within its claimed expansion and confirm the correct printing.
+25. ✅ **[I] Constrained retry** — re-check a wrong result within its claimed expansion and confirm the correct printing.
+26. ✅ **[I] Versioned result history** — per-card vN JSON files, per-version reviews, item-view history selector.
 
 Tags: **[D]** data · **[Dsn]** design decision · **[I]** implementation.

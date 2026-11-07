@@ -304,27 +304,33 @@ def set_review(
     *,
     run: str,
     result_group: str,
+    iteration: int = 0,
     status: str,
     expansion: str | None = None,
     predicted_card_code: str | None = None,
     predicted_print_index: int | None = None,
     score: float | None = None,
     note: str | None = None,
-) -> sqlite3.Row:
-    if status not in ("right", "wrong"):
+) -> sqlite3.Row | None:
+    if status not in ("right", "wrong", "unmarked"):
         raise ValueError(f"unknown review status: {status}")
 
-    now = datetime.now(UTC).isoformat(timespec="seconds")
     expansion = expansion.strip().upper() if expansion else None
     if status == "right":
         expansion = None
 
+    if status == "unmarked" and expansion is None and note is None:
+        clear_review(conn, run, result_group, iteration)
+        return None
+
+    now = datetime.now(UTC).isoformat(timespec="seconds")
     conn.execute(
         """
-        INSERT INTO reviews (run, result_group, status, expansion, predicted_card_code,
-                             predicted_print_index, score, note, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT (run, result_group) DO UPDATE SET
+        INSERT INTO reviews (run, result_group, iteration, status, expansion,
+                             predicted_card_code, predicted_print_index, score, note,
+                             created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (run, result_group, iteration) DO UPDATE SET
             status = excluded.status,
             expansion = excluded.expansion,
             predicted_card_code = excluded.predicted_card_code,
@@ -336,6 +342,7 @@ def set_review(
         (
             run,
             result_group,
+            iteration,
             status,
             expansion,
             predicted_card_code,
@@ -347,24 +354,24 @@ def set_review(
         ),
     )
     conn.commit()
-    review = get_review(conn, run, result_group)
-    assert review is not None
-    return review
+    return get_review(conn, run, result_group, iteration)
 
 
-def clear_review(conn: sqlite3.Connection, run: str, result_group: str) -> bool:
+def clear_review(conn: sqlite3.Connection, run: str, result_group: str, iteration: int = 0) -> bool:
     cursor = conn.execute(
-        "DELETE FROM reviews WHERE run = ? AND result_group = ?",
-        (run, result_group),
+        "DELETE FROM reviews WHERE run = ? AND result_group = ? AND iteration = ?",
+        (run, result_group, iteration),
     )
     conn.commit()
     return cursor.rowcount > 0
 
 
-def get_review(conn: sqlite3.Connection, run: str, result_group: str) -> sqlite3.Row | None:
+def get_review(
+    conn: sqlite3.Connection, run: str, result_group: str, iteration: int = 0
+) -> sqlite3.Row | None:
     return conn.execute(
-        "SELECT * FROM reviews WHERE run = ? AND result_group = ?",
-        (run, result_group),
+        "SELECT * FROM reviews WHERE run = ? AND result_group = ? AND iteration = ?",
+        (run, result_group, iteration),
     ).fetchone()
 
 
@@ -372,20 +379,30 @@ def list_reviews(conn: sqlite3.Connection, *, run: str | None = None) -> list[sq
     clause = "WHERE run = ?" if run is not None else ""
     params: tuple[object, ...] = (run,) if run is not None else ()
     return conn.execute(
-        f"SELECT * FROM reviews {clause} ORDER BY run, result_group",
+        f"SELECT * FROM reviews {clause} ORDER BY run, result_group, iteration",
         params,
     ).fetchall()
 
 
-def review_stats(conn: sqlite3.Connection, *, run: str | None = None) -> dict[str, object]:
+def review_stats(
+    conn: sqlite3.Connection,
+    *,
+    run: str | None = None,
+    latest: dict[tuple[str, str], int] | None = None,
+) -> dict[str, object]:
     rows = list_reviews(conn, run=run)
-    right = sum(1 for row in rows if row["status"] == "right")
-    wrong = len(rows) - right
-    reviewed = len(rows)
+    if latest is not None:
+        rows = [
+            row for row in rows if latest.get((row["run"], row["result_group"])) == row["iteration"]
+        ]
+
+    reviewed = [row for row in rows if row["status"] in ("right", "wrong")]
+    right = sum(1 for row in reviewed if row["status"] == "right")
+    wrong = len(reviewed) - right
 
     by_expansion: dict[str, dict[str, int]] = {}
     claimed: dict[str, int] = {}
-    for row in rows:
+    for row in reviewed:
         code = row["predicted_card_code"] or ""
         expansion = code.split("-")[0] if code else "unknown"
         bucket = by_expansion.setdefault(expansion, {"right": 0, "wrong": 0})
@@ -394,10 +411,11 @@ def review_stats(conn: sqlite3.Connection, *, run: str | None = None) -> dict[st
             claimed[row["expansion"]] = claimed.get(row["expansion"], 0) + 1
 
     return {
-        "reviewed": reviewed,
+        "reviewed": len(reviewed),
         "right": right,
         "wrong": wrong,
-        "accuracy": right / reviewed if reviewed else None,
+        "unmarked": len(rows) - len(reviewed),
+        "accuracy": right / len(reviewed) if reviewed else None,
         "by_expansion": dict(sorted(by_expansion.items())),
         "claimed_expansion": dict(sorted(claimed.items())),
     }

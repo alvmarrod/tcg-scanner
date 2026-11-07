@@ -93,7 +93,7 @@ def _client(tmp_path, *, code="OP15-001", print_index=0, rotation=0):
 
     run = root / "output" / "run-a"
     run.mkdir(parents=True)
-    (run / "card-a.json").write_text(
+    (run / "card-a.v0.json").write_text(
         json.dumps(_report(input_path, code=code, print_index=print_index, rotation=rotation)),
         encoding="utf-8",
     )
@@ -124,7 +124,7 @@ def test_lists_runs_and_results(tmp_path):
     summary = detail["results"][0]
     assert summary["card_code"] == "OP15-001"
     assert summary["score"] == 0.9
-    assert summary["input_url"].endswith("/input")
+    assert "/input?iteration=0" in summary["input_url"]
     assert summary["expansion"] == "OP15"
     assert summary["price_eur"] == 0.1
     assert summary["price_usd"] == 0.2
@@ -233,7 +233,7 @@ def test_review_is_marked_stale_after_the_result_changes(tmp_path):
     client = _client(tmp_path)
     client.put("/api/runs/run-a/results/card-a/review", json={"status": "right"})
 
-    path = tmp_path / "data" / "output" / "run-a" / "card-a.json"
+    path = tmp_path / "data" / "output" / "run-a" / "card-a.v0.json"
     report = json.loads(path.read_text(encoding="utf-8"))
     report["detections"][0]["card_code"] = "OP15-099"
     path.write_text(json.dumps(report), encoding="utf-8")
@@ -255,3 +255,69 @@ def test_lists_catalog_expansions(tmp_path):
     client = _client(tmp_path)
 
     assert client.get("/api/expansions").json()["expansions"] == ["OP15"]
+
+
+def test_result_history_and_latest_selection(tmp_path):
+    client = _client(tmp_path)
+    path = tmp_path / "data" / "output" / "run-a" / "card-a.v0.json"
+    first = json.loads(path.read_text(encoding="utf-8"))
+    second = json.loads(json.dumps(first))
+    second["detections"][0]["card_code"] = "OP15-099"
+    second["detections"][0]["confidence"] = 0.8
+    second["version"] = {
+        "iteration": 1,
+        "kind": "retry",
+        "created_at": "2026-01-02",
+        "hint": {"status": "wrong", "expansion": "OP15", "note": None},
+        "previous": {"card_code": "OP15-001", "print_index": 0, "score": 0.9},
+    }
+    (path.parent / "card-a.v1.json").write_text(json.dumps(second), encoding="utf-8")
+
+    run = client.get("/api/runs/run-a").json()
+    assert run["results"][0]["iteration"] == 1
+    assert run["results"][0]["is_latest"] is True
+    assert run["results"][0]["card_code"] == "OP15-099"
+
+    detail = client.get("/api/runs/run-a/results/card-a?iteration=0").json()
+    assert detail["iteration"] == 0
+    assert detail["latest_iteration"] == 1
+    assert len(detail["history"]) == 2
+    assert detail["history"][1]["version"]["hint"]["expansion"] == "OP15"
+
+    assert (
+        client.put(
+            "/api/runs/run-a/results/card-a/review?iteration=0",
+            json={"status": "wrong"},
+        ).status_code
+        == 409
+    )
+
+
+def test_stats_use_the_latest_review_per_result(tmp_path):
+    client = _client(tmp_path)
+    client.put("/api/runs/run-a/results/card-a/review", json={"status": "wrong"})
+    path = tmp_path / "data" / "output" / "run-a" / "card-a.v0.json"
+    second = json.loads(path.read_text(encoding="utf-8"))
+    second["version"] = {"iteration": 1, "kind": "retry", "hint": None}
+    (path.parent / "card-a.v1.json").write_text(json.dumps(second), encoding="utf-8")
+    client.put("/api/runs/run-a/results/card-a/review", json={"status": "right"})
+
+    stats = client.get("/api/runs/run-a/stats").json()
+
+    assert stats["reviewed"] == 1
+    assert stats["right"] == 1
+    assert stats["wrong"] == 0
+
+
+def test_retry_is_rejected_without_the_recognition_stack(tmp_path, monkeypatch):
+    import tcg_scanner.web.app as web_app
+
+    client = _client(tmp_path)
+    monkeypatch.setattr(web_app, "recognition_available", lambda: False)
+
+    response = client.post(
+        "/api/runs/run-a/retry",
+        json={"groups": ["card-a"]},
+    )
+
+    assert response.status_code == 503

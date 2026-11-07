@@ -2,83 +2,64 @@
   import { onMount } from 'svelte'
   import { getJSON, enc } from './api.js'
   import { loadSort, sortResults } from './sort.js'
+  import { startRetry, waitForJob } from './retry.js'
 
   let { run, group } = $props()
   let detail = $state(null)
   let runData = $state(null)
+  let expansions = $state([])
+  let capabilities = $state({ retry: false })
   let error = $state(null)
+
+  let iteration = $state(null)
   let review = $state(null)
   let expansion = $state('')
   let note = $state('')
-  let expansions = $state([])
   let saving = $state(false)
   let reviewError = $state(null)
 
+  let retrying = $state(false)
+  let job = $state(null)
+  let jobError = $state(null)
+
+  const sort = loadSort()
+
   onMount(async () => {
     try {
-      const [result, runInfo, expansionInfo] = await Promise.all([
-        getJSON(`/api/runs/${enc(run)}/results/${enc(group)}`),
+      const [runInfo, expansionInfo, caps] = await Promise.all([
         getJSON(`/api/runs/${enc(run)}`),
         getJSON('/api/expansions'),
+        getJSON('/api/capabilities'),
       ])
-      detail = result
       runData = runInfo
       expansions = expansionInfo.expansions
-      review = result.summary.review
-      expansion = review?.expansion ?? ''
-      note = review?.note ?? ''
+      capabilities = caps
+      await loadDetail(null)
     } catch (problem) {
       error = problem.message
     }
   })
 
-  async function saveReview(status) {
-    saving = true
-    reviewError = null
-    try {
-      const response = await fetch(
-        `/api/runs/${enc(run)}/results/${enc(group)}/review`,
-        {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            status,
-            expansion: status === 'wrong' ? expansion || null : null,
-            note: note || null,
-          }),
-        },
-      )
-      if (!response.ok) throw new Error(`${response.status} ${response.statusText}`)
-      review = await response.json()
-      if (review.status === 'right') expansion = ''
-    } catch (problem) {
-      reviewError = problem.message
-    } finally {
-      saving = false
-    }
+  async function loadRun() {
+    runData = await getJSON(`/api/runs/${enc(run)}`)
   }
 
-  async function clearReview() {
-    saving = true
-    reviewError = null
-    try {
-      const response = await fetch(
-        `/api/runs/${enc(run)}/results/${enc(group)}/review`,
-        { method: 'DELETE' },
-      )
-      if (!response.ok) throw new Error(`${response.status} ${response.statusText}`)
-      review = null
-      expansion = ''
-      note = ''
-    } catch (problem) {
-      reviewError = problem.message
-    } finally {
-      saving = false
-    }
+  async function loadDetail(number) {
+    const query =
+      number === null || number === undefined ? '' : `?iteration=${number}`
+    const result = await getJSON(
+      `/api/runs/${enc(run)}/results/${enc(group)}${query}`,
+    )
+    detail = result
+    iteration = result.iteration
+    review = result.summary.review
+    expansion = review?.expansion ?? ''
+    note = review?.note ?? ''
   }
 
-  const sort = loadSort()
-  let ordered = $derived(runData ? sortResults(runData.results, sort.field, sort.direction) : [])
+  let ordered = $derived(
+    runData ? sortResults(runData.results, sort.field, sort.direction) : [],
+  )
   let index = $derived(ordered.findIndex((item) => item.group === group))
   let previous = $derived(index > 0 ? ordered[index - 1] : null)
   let next = $derived(index >= 0 && index < ordered.length - 1 ? ordered[index + 1] : null)
@@ -98,7 +79,105 @@
 
   let summary = $derived(detail?.summary)
   let report = $derived(detail?.report)
-  let detection = $derived(report?.detections?.[0])
+  let isLatest = $derived(Boolean(summary?.is_latest))
+  let estate = $derived(
+    review?.status === 'right'
+      ? 'Confirmed'
+      : review?.status === 'wrong'
+        ? 'Wrong'
+        : 'Unmarked',
+  )
+  let estateClass = $derived(
+    review?.status === 'right' ? 'ok' : review?.status === 'wrong' ? 'bad' : 'neutral',
+  )
+  let canRetry = $derived(
+    isLatest && review?.status === 'wrong' && Boolean(review?.expansion),
+  )
+  let hint = $derived(summary?.version?.hint ?? null)
+
+  async function putReview(payload) {
+    saving = true
+    reviewError = null
+    try {
+      const response = await fetch(
+        `/api/runs/${enc(run)}/results/${enc(group)}/review`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        },
+      )
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        throw new Error(data.detail || `${response.status} ${response.statusText}`)
+      }
+      return await response.json()
+    } finally {
+      saving = false
+    }
+  }
+
+  async function applyReview(payload) {
+    try {
+      review = await putReview(payload)
+      if (review === null) {
+        expansion = ''
+        note = ''
+      } else {
+        expansion = review.expansion ?? expansion
+      }
+    } catch (problem) {
+      reviewError = problem.message
+    }
+  }
+
+  function saveStatus(status) {
+    applyReview({
+      status,
+      expansion: status === 'wrong' ? expansion || null : null,
+      note: note || null,
+    })
+  }
+
+  function saveDetails() {
+    const status = expansion
+      ? 'wrong'
+      : review?.status === 'right' || review?.status === 'wrong'
+        ? review.status
+        : 'unmarked'
+    applyReview({ status, expansion: expansion || null, note: note || null })
+  }
+
+  function clearWrong() {
+    applyReview({
+      status: 'unmarked',
+      expansion: expansion || null,
+      note: note || null,
+    })
+  }
+
+  function clearExpansion() {
+    applyReview({
+      status: review?.status ?? 'unmarked',
+      expansion: null,
+      note: note || null,
+    })
+  }
+
+  async function retry() {
+    retrying = true
+    jobError = null
+    try {
+      const jobId = await startRetry(run, [group])
+      const finished = await waitForJob(jobId, (update) => (job = update))
+      job = finished
+      await Promise.all([loadDetail(null), loadRun()])
+    } catch (problem) {
+      jobError = problem.message
+    } finally {
+      retrying = false
+    }
+  }
 </script>
 
 <nav class="crumbs">
@@ -117,6 +196,23 @@
       <h1>{summary.card_code ?? 'No match'}{summary.print_index !== null ? ` #${summary.print_index}` : ''}</h1>
       <span class="muted">{summary.card_name ?? ''}</span>
       <span class="score-big">{summary.score !== null ? summary.score.toFixed(3) : '—'}</span>
+    </div>
+
+    <div class="version-bar">
+      <span class="muted">version</span>
+      <select value={iteration} onchange={(event) => loadDetail(Number(event.currentTarget.value))}>
+        {#each detail.history as version}
+          <option value={version.iteration}>
+            v{version.iteration} · {version.version?.kind ?? 'batch'}{version.version?.hint?.expansion ? ` · ${version.version.hint.expansion}` : ''}
+          </option>
+        {/each}
+      </select>
+      {#if !isLatest}<span class="version-note">older version · read only</span>{/if}
+      {#if hint}
+        <span class="version-note">
+          hint: {hint.status}{hint.expansion ? ` → ${hint.expansion}` : ''}{hint.note ? ` · ${hint.note}` : ''}
+        </span>
+      {/if}
     </div>
 
     <div class="compare">
@@ -141,47 +237,6 @@
       <button class="ghost" disabled={!next} onclick={() => go(next)}>next →</button>
     </div>
 
-    <div class="panel review-panel">
-      <div class="review-head">
-        <h2>Review</h2>
-        <div class="review-actions">
-          <button
-            class="pill ok"
-            class:active={review?.status === 'right'}
-            disabled={saving}
-            onclick={() => saveReview('right')}
-          >✓ right</button>
-          <button
-            class="pill bad"
-            class:active={review?.status === 'wrong'}
-            disabled={saving}
-            onclick={() => saveReview('wrong')}
-          >✗ wrong</button>
-          {#if review}
-            <button class="ghost" disabled={saving} onclick={clearReview}>clear</button>
-          {/if}
-        </div>
-      </div>
-      {#if review?.stale}
-        <p class="warn-text">this review refers to an older prediction; re-check it</p>
-      {/if}
-      {#if review?.status === 'wrong'}
-        <div class="review-fields">
-          <label>correct expansion
-            <input list="expansions" bind:value={expansion} placeholder="OP15" />
-          </label>
-          <label>note
-            <input bind:value={note} placeholder="optional" />
-          </label>
-          <button class="ghost" disabled={saving} onclick={() => saveReview('wrong')}>save details</button>
-        </div>
-        <datalist id="expansions">
-          {#each expansions as value}<option value={value}></option>{/each}
-        </datalist>
-      {/if}
-      {#if reviewError}<p class="error">{reviewError}</p>{/if}
-    </div>
-
     {#if report.warnings.length > 0}
       <ul class="warnings">
         {#each report.warnings as warning}
@@ -194,6 +249,7 @@
       <div class="panel">
         <h2>Match</h2>
         <dl>
+          <dt>estate</dt><dd class="estate {estateClass}">{estate}{review?.expansion ? ` · ${review.expansion}` : ''}</dd>
           <dt>score</dt><dd>{summary.score !== null ? summary.score.toFixed(3) : '—'}</dd>
           <dt>patch</dt><dd>{summary.patch_score !== null ? summary.patch_score.toFixed(3) : '—'}</dd>
           <dt>margin</dt><dd>{summary.margin !== null ? summary.margin.toFixed(3) : '—'}</dd>
@@ -221,19 +277,75 @@
           <dt>USD</dt><dd>{report.prices?.usd ?? '—'}</dd>
         </dl>
       </div>
-      {#if report.photos.length > 1}
-        <div class="panel">
-          <h2>Photos</h2>
-          <ul class="photo-list">
-            {#each report.photos as photo}
-              <li>
-                <img src={`/api/runs/${enc(run)}/results/${enc(group)}/input?thumb=1`} alt="" />
-                <span class="muted">{photo.excluded ? 'excluded' : 'used'}</span>
-              </li>
-            {/each}
-          </ul>
+    </div>
+
+    <div class="panel review-panel">
+      <div class="review-head">
+        <h2>Review</h2>
+        {#if review?.stale}
+          <span class="warn-text">this review refers to an older prediction</span>
+        {/if}
+      </div>
+      <div class="review-actions">
+        <button
+          class="pill ok"
+          class:active={review?.status === 'right'}
+          disabled={!isLatest || saving}
+          onclick={() => saveStatus('right')}
+        >✓ right</button>
+        <button
+          class="pill bad"
+          class:active={review?.status === 'wrong'}
+          disabled={!isLatest || saving}
+          onclick={() => saveStatus('wrong')}
+        >✗ wrong</button>
+        {#if review}
+          <button class="ghost" disabled={!isLatest || saving} onclick={clearWrong}>clear wrong</button>
+          <button class="ghost" disabled={!isLatest || saving} onclick={clearExpansion}>clear expansion</button>
+        {/if}
+      </div>
+
+      <div class="review-fields">
+        <label>correct expansion
+          <input
+            list="expansions"
+            bind:value={expansion}
+            placeholder="OP15"
+            disabled={!isLatest || saving}
+            onchange={() => { if (expansion) saveDetails() }}
+          />
+        </label>
+        <label>note
+          <input bind:value={note} placeholder="optional" disabled={!isLatest || saving} />
+        </label>
+        <button class="ghost" disabled={!isLatest || saving} onclick={saveDetails}>save details</button>
+      </div>
+      <datalist id="expansions">
+        {#each expansions as value}<option value={value}></option>{/each}
+      </datalist>
+      {#if !isLatest}<p class="version-note">Select the latest version to edit its review.</p>{/if}
+      {#if reviewError}<p class="error">{reviewError}</p>{/if}
+    </div>
+
+    <div class="panel retry-row">
+      <button
+        class="ghost"
+        disabled={!canRetry || retrying || !capabilities.retry}
+        onclick={retry}
+        title={!capabilities.retry ? 'recognition extra is not installed' : !canRetry ? 'needs a wrong review with an expansion' : ''}
+      >
+        retry within {review?.expansion ?? 'expansion'}
+      </button>
+      {#if !capabilities.retry}
+        <span class="version-note">retry is disabled: the recognition extra is not installed on the server</span>
+      {/if}
+      {#if job}
+        <div class="progress" style="flex:1">
+          <div class="progress-bar" style={`width:${job.total ? (job.completed / job.total) * 100 : 0}%`}></div>
+          <span>{job.completed}/{job.total}{job.state === 'failed' ? ' · failed' : ''}</span>
         </div>
       {/if}
+      {#if jobError}<p class="error">{jobError}</p>{/if}
     </div>
 
     <details class="raw">

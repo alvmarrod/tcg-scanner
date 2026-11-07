@@ -79,6 +79,7 @@ uv run tcg-scanner index build
 uv run tcg-scanner inspect path/to/photo.jpg
 uv run tcg-scanner identify path/to/photo.jpg          # JSON
 uv run tcg-scanner identify --text path/to/photo.jpg   # human table
+uv run tcg-scanner identify --expansion OP15 path.jpg  # constrained search
 uv run tcg-scanner batch
 uv run tcg-scanner serve
 uv run tcg-scanner review list
@@ -132,8 +133,9 @@ never silent.
 `batch` identifies every card in `data/input/` (or `--input DIR`). First-level folders
 are one card each (`card-001/front.jpg`, `card-001/back.jpg`); loose images become
 single-photo cards. Each group is fused (best score per printing, OCR majority,
-outlier photos excluded with a warning) and written as one JSON report to
-`data/output/<input-folder>/<group>.json`, alongside a `run.json` manifest. Nothing is
+outlier photos excluded with a warning) and written as a versioned JSON report:
+`data/output/<input-folder>/<group>.v0.json` for the first batch, `.v1`, `.v2`, …
+when the batch is run again. `run.json` keeps the list of batch invocations. Nothing is
 written to `library.db`. A broken file does not stop the run; the command exits 1 if
 any file failed.
 
@@ -181,11 +183,21 @@ npm install
 npm run build
 ```
 
-Each result can be reviewed as **right** or **wrong** (printing-level; unmarked stays
-neutral). Wrong results can claim a corrective expansion such as `OP15`, which is
-recorded but does not re-run recognition yet. Feedback lives in `library.db`, is written
-only by the web app, and is marked stale if the result is regenerated with a different
-prediction.
+Results are versioned per card inside a run (`v0` first batch, `v1` retry, …). The
+item view defaults to the latest version and has a version selector for the full
+history, including the hint that produced each retry.
+
+Each version can be reviewed as **right** or **wrong** (printing-level; unmarked stays
+neutral), with an optional corrective expansion such as `OP15`. Choosing an expansion
+marks the version wrong. Separate buttons clear the verdict or the expansion. Feedback
+lives in `library.db`, is written only by the web app, and older versions are read-only.
+Global statistics use each card's latest version.
+
+A wrong result with an expansion can be retried: individually in the item view, or in
+bulk via checkboxes in the album/list. The server runs the retry in the background and
+both views show a progress bar. Retry appends the next version and records the hint
+that produced it; the previous results remain browsable. Retry is disabled when the
+server does not have the recognition extra.
 
 `review stats` and the run header show reviewed/right/wrong counts, accuracy overall
 and per predicted expansion, plus the claimed expansions of wrong results.

@@ -78,6 +78,9 @@ def build_parser() -> argparse.ArgumentParser:
     identify.add_argument(
         "--prefer", choices=["jp", "en"], default="jp", help="preferred reference language"
     )
+    identify.add_argument(
+        "--expansion", default=None, metavar="CODE", help="only search this expansion"
+    )
 
     matches = commands.add_parser("matches", help="accept or reject recorded matches")
     matches_commands = matches.add_subparsers(dest="matches_command", required=True)
@@ -380,9 +383,13 @@ def _identify(args: argparse.Namespace) -> int:
     conn = open_catalog(config.catalog_db())
     try:
         recognizer = Recognizer(conn, prefer=args.prefer, top_k=args.top)
-        recognition = recognizer.recognize(args.image)
+        recognition = recognizer.recognize(args.image, expansion=args.expansion)
         fused = fuse([recognition], top_k=args.top)
-        prices = _latest_prices(conn, fused.candidates[0]) if fused.candidates else _no_prices()
+        prices = (
+            _prices(conn, fused.candidates[0])
+            if fused.candidates
+            else {"eur": None, "usd": None, "currency": None}
+        )
         index_size = len(recognizer.index)
     finally:
         conn.close()
@@ -491,9 +498,16 @@ def _batch(args: argparse.Namespace) -> int:
     import json
     from datetime import UTC, datetime
 
-    from tcg_scanner.batch import discover_groups, result_path
+    from tcg_scanner.batch import discover_groups
     from tcg_scanner.recognition.api import Recognizer, fuse
     from tcg_scanner.recognition.report import build_report
+    from tcg_scanner.results import (
+        annotate,
+        load,
+        next_iteration,
+        previous_summary,
+        version_path,
+    )
 
     input_dir = args.input or config.input_dir()
     groups = discover_groups(input_dir)
@@ -507,6 +521,24 @@ def _batch(args: argparse.Namespace) -> int:
 
     matched = no_match = failed = 0
     created_at = datetime.now(UTC).isoformat(timespec="seconds")
+    meta_path = output_dir / "run.json"
+    metadata: dict = {}
+    if meta_path.is_file():
+        try:
+            metadata = json.loads(meta_path.read_text(encoding="utf-8"))
+        except OSError, json.JSONDecodeError:
+            metadata = {}
+    batches = metadata.get("batches")
+    if not isinstance(batches, list):
+        batches = []
+        if metadata.get("created_at"):
+            batches.append(
+                {
+                    key: metadata[key]
+                    for key in ("created_at", "input", "photos", "groups", "model")
+                    if key in metadata
+                }
+            )
     conn = open_catalog(config.catalog_db())
     try:
         recognizer = Recognizer(conn, prefer=args.prefer, top_k=args.top)
@@ -523,14 +555,32 @@ def _batch(args: argparse.Namespace) -> int:
 
             fused = fuse(recognitions, top_k=args.top)
             top = fused.candidates[0] if fused.candidates else None
-            prices = _latest_prices(conn, top) if top is not None else _no_prices()
+            prices = (
+                _prices(conn, top)
+                if top is not None
+                else {"eur": None, "usd": None, "currency": None}
+            )
             report = build_report(
                 group=group.name,
                 fused=fused,
                 prices=prices,
                 preferred_language=args.prefer,
             )
-            path = result_path(output_dir, group.name)
+            iteration = next_iteration(output_dir, group.name)
+            previous = None
+            if iteration:
+                previous_path = version_path(output_dir, group.name, iteration - 1)
+                if previous_path.is_file():
+                    previous = previous_summary(load(previous_path))
+            report = annotate(
+                report,
+                iteration=iteration,
+                kind="batch",
+                created_at=created_at,
+                hint=None,
+                previous=previous,
+            )
+            path = version_path(output_dir, group.name, iteration)
             path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
 
             if top is None:
@@ -549,16 +599,21 @@ def _batch(args: argparse.Namespace) -> int:
     finally:
         conn.close()
 
-    (output_dir / "run.json").write_text(
+    batches.append(
+        {
+            "created_at": created_at,
+            "input": str(input_dir),
+            "photos": sum(len(group.images) for group in groups),
+            "groups": len(groups),
+            "model": recognizer.embedder.model_name,
+        }
+    )
+    meta_path.write_text(
         json.dumps(
             {
-                "schema_version": 1,
+                "schema_version": 2,
                 "name": output_dir.name,
-                "input": str(input_dir),
-                "created_at": created_at,
-                "photos": sum(len(group.images) for group in groups),
-                "groups": len(groups),
-                "model": recognizer.embedder.model_name,
+                "batches": batches,
             },
             indent=2,
         )
@@ -572,25 +627,10 @@ def _batch(args: argparse.Namespace) -> int:
     return 0 if failed == 0 else 1
 
 
-def _no_prices() -> dict[str, object]:
-    return {"eur": None, "usd": None, "currency": None}
+def _prices(conn, candidate) -> dict[str, object]:
+    from tcg_scanner.prices import latest_prices
 
-
-def _latest_prices(conn, candidate) -> dict[str, object]:
-    rows = conn.execute(
-        "SELECT source, currency, amount FROM latest_prices "
-        "WHERE card_code = ? AND print_index = ?",
-        (candidate.card_code, candidate.print_index),
-    ).fetchall()
-    by_source = {row["source"]: (row["amount"], row["currency"]) for row in rows}
-    eur = by_source.get("cardmarket")
-    usd = by_source.get("tcgplayer")
-    currency = eur[1] if eur is not None else (usd[1] if usd is not None else None)
-    return {
-        "eur": eur[0] if eur is not None else None,
-        "usd": usd[0] if usd is not None else None,
-        "currency": currency,
-    }
+    return latest_prices(conn, candidate.card_code, candidate.print_index)
 
 
 def _open_library_with_catalog():
@@ -792,6 +832,27 @@ def _review_connection():
     return open_library(config.library_db())
 
 
+def _latest_version_map(run: str | None) -> dict[tuple[str, str], int]:
+    from tcg_scanner.results import latest_versions
+
+    root = config.output_dir()
+    mapping: dict[tuple[str, str], int] = {}
+    if run is not None:
+        names = [run]
+    elif root.is_dir():
+        names = [
+            entry.name
+            for entry in root.iterdir()
+            if entry.is_dir() and not entry.name.startswith(".")
+        ]
+    else:
+        names = []
+    for name in names:
+        for group, iteration in latest_versions(root / name).items():
+            mapping[(name, group)] = iteration
+    return mapping
+
+
 def _review_list(args: argparse.Namespace) -> int:
     from tcg_scanner.db.library import list_reviews
 
@@ -808,8 +869,8 @@ def _review_list(args: argparse.Namespace) -> int:
         expansion = f" → {row['expansion']}" if row["expansion"] else ""
         note = f"  {row['note']}" if row["note"] else ""
         print(
-            f"{row['run']}/{row['result_group']}  {row['status']}{expansion}  "
-            f"{row['updated_at']}{note}"
+            f"{row['run']}/{row['result_group']} v{row['iteration']}  "
+            f"{row['status']}{expansion}  {row['updated_at']}{note}"
         )
     return 0
 
@@ -819,7 +880,7 @@ def _review_stats(args: argparse.Namespace) -> int:
 
     conn = _review_connection()
     try:
-        stats = review_stats(conn, run=args.run)
+        stats = review_stats(conn, run=args.run, latest=_latest_version_map(args.run))
     finally:
         conn.close()
 

@@ -8,7 +8,7 @@ _SCHEMA_DIR = Path(__file__).parent
 # The schema files are version 1 and stay frozen. Later changes are added as
 # migrations keyed by the version they produce; fresh databases run the baseline
 # and then every migration in order.
-SCHEMA_VERSIONS = {"catalog": 3, "library": 2}
+SCHEMA_VERSIONS = {"catalog": 3, "library": 3}
 MIGRATIONS: dict[str, dict[int, str]] = {
     "catalog": {
         2: """
@@ -81,6 +81,36 @@ MIGRATIONS: dict[str, dict[int, str]] = {
             );
 
             CREATE INDEX IF NOT EXISTS idx_reviews_run ON reviews (run);
+        """,
+        3: """
+            CREATE TABLE reviews_v3 (
+                id                    INTEGER PRIMARY KEY,
+                run                   TEXT NOT NULL,
+                result_group          TEXT NOT NULL,
+                iteration             INTEGER NOT NULL DEFAULT 0,
+                status                TEXT NOT NULL
+                                      CHECK (status IN ('right', 'wrong', 'unmarked')),
+                expansion             TEXT,
+                predicted_card_code   TEXT,
+                predicted_print_index INTEGER,
+                score                 REAL,
+                note                  TEXT,
+                created_at            TEXT NOT NULL,
+                updated_at            TEXT NOT NULL,
+                UNIQUE (run, result_group, iteration)
+            );
+
+            INSERT INTO reviews_v3 (id, run, result_group, iteration, status, expansion,
+                                    predicted_card_code, predicted_print_index, score,
+                                    note, created_at, updated_at)
+            SELECT id, run, result_group, 0, status, expansion,
+                   predicted_card_code, predicted_print_index, score,
+                   note, created_at, updated_at
+            FROM reviews;
+
+            DROP TABLE reviews;
+            ALTER TABLE reviews_v3 RENAME TO reviews;
+            CREATE INDEX idx_reviews_run ON reviews (run);
         """,
     },
 }

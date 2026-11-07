@@ -66,7 +66,7 @@ class Recognizer:
         self.reader = reader or CodeReader()
         self.index = load_index(conn, self.embedder.model_name, origins=origins)
 
-    def recognize(self, image: Path) -> Recognition:
+    def recognize(self, image: Path, *, expansion: str | None = None) -> Recognition:
         rectified = rectify_file(image)
         upright, reading, flipped = _read_oriented(self.reader, rectified.image)
         if flipped:
@@ -75,12 +75,16 @@ class Recognizer:
                 image=upright,
                 rotation=(rectified.rotation + 180) % 360,
             )
+        code = reading.code
+        if expansion and code and not code.startswith(f"{expansion.upper()}-"):
+            code = None
         query, patches = self.embedder.embed_bgr(rectified.image)
         search = identify(
             self.conn,
             self.index,
             query[0],
-            code=reading.code,
+            code=code,
+            expansion=expansion,
             preferred_language=self.prefer,
             top_k=self.top_k,
         )

@@ -44,6 +44,7 @@ def rank(
     query: np.ndarray,
     *,
     code: str | None = None,
+    expansion: str | None = None,
     preferred_language: str = "jp",
     top_k: int = 5,
 ) -> list[tuple[PrintingKey, float, str]]:
@@ -56,11 +57,15 @@ def rank(
         return []
 
     scores = index.vectors @ query
+    mask = np.ones(len(index.card_codes), dtype=bool)
     if code is not None:
-        mask = np.array([candidate == code for candidate in index.card_codes])
-        if not mask.any():
-            return []
-        scores = np.where(mask, scores, -np.inf)
+        mask &= np.array([candidate == code for candidate in index.card_codes])
+    if expansion is not None:
+        prefix = f"{expansion.upper()}-"
+        mask &= np.array([candidate.startswith(prefix) for candidate in index.card_codes])
+    if not mask.any():
+        return []
+    scores = np.where(mask, scores, -np.inf)
 
     key_ids, inverse = np.unique(index.key_ids, return_inverse=True)
     preferred = np.array(
@@ -93,6 +98,7 @@ def identify(
     query: np.ndarray,
     *,
     code: str | None = None,
+    expansion: str | None = None,
     preferred_language: str = "jp",
     top_k: int = 5,
 ) -> SearchResult:
@@ -100,13 +106,20 @@ def identify(
         index,
         query,
         code=code,
+        expansion=expansion,
         preferred_language=preferred_language,
         top_k=top_k,
     )
     code_used = code is not None
     if not ranked and code is not None:
         # A misread code must not turn a good image match into "no match".
-        ranked = rank(index, query, preferred_language=preferred_language, top_k=top_k)
+        ranked = rank(
+            index,
+            query,
+            expansion=expansion,
+            preferred_language=preferred_language,
+            top_k=top_k,
+        )
         code_used = False
     if not ranked:
         return SearchResult(candidates=[], code_used=code_used)
